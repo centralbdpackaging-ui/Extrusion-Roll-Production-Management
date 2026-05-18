@@ -3,57 +3,70 @@ import path from "path";
 import fs from "fs";
 import { createServer as createViteServer } from "vite";
 import { google } from "googleapis";
-import admin from "firebase-admin";
-
-import { getFirestore } from "firebase-admin/firestore";
+import { initializeApp } from "firebase/app";
+import { 
+  getFirestore, 
+  collection, 
+  doc, 
+  getDoc, 
+  getDocs, 
+  setDoc, 
+  addDoc, 
+  updateDoc, 
+  query, 
+  orderBy, 
+  limit, 
+  writeBatch 
+} from "firebase/firestore";
 
 async function startServer() {
   const app = express();
   const PORT = 3000;
 
-  // Initialize Firebase Admin inside startServer for better error isolation
-  let databaseId: string | undefined;
+  app.use(express.json());
+  app.use(express.urlencoded({ extended: true }));
+
+  // Initialize Firebase Client SDK on server to bypass IAM issues with Admin SDK
+  let firebaseApp: any;
   let dbInstance: any;
 
   try {
     const configPath = path.join(process.cwd(), "firebase-applet-config.json");
     if (fs.existsSync(configPath)) {
       const config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
-      databaseId = config.firestoreDatabaseId;
-      if (!admin.apps.length) {
-        admin.initializeApp({
-          projectId: config.projectId,
-        });
-      }
-      console.log("[Firebase] Config loaded. Project:", config.projectId, "Database:", databaseId);
+      firebaseApp = initializeApp(config);
+      dbInstance = getFirestore(firebaseApp, config.firestoreDatabaseId);
+      console.log("[Firebase] Client SDK initialized. Project:", config.projectId);
     } else {
-      console.warn("[Firebase] No config file found, using environment defaults");
-      if (!admin.apps.length) admin.initializeApp();
-    }
-    
-    // In many environments, using the default database is safer if the named one fails
-    try {
-      dbInstance = getFirestore(databaseId || "(default)");
-      // Test the connection immediately
-      await dbInstance.collection('health_test').doc('ping').set({ lastPing: new Date().toISOString() });
-      console.log("[Firebase] Database connection successful to:", databaseId || "(default)");
-    } catch (testError) {
-      console.error("[Firebase] Failed to connect to specific database, trying default...");
-      dbInstance = getFirestore();
-      await dbInstance.collection('health_test').doc('ping').set({ lastPing: new Date().toISOString() });
-      console.log("[Firebase] Database connection successful to default database");
+      console.warn("[Firebase] No config file found for Client SDK");
     }
   } catch (error) {
     console.error("[Firebase] Initialization failed:", error);
   }
 
-  // Global Error Handler to prevent process crashes
+  // Global Error Handler
   app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
     console.error("[Global Error]", err);
     res.status(500).json({ error: "Internal Server Error", message: err.message });
   });
 
-  // API routes
+  app.get("/api/debug/firebase", async (req, res) => {
+    res.json({
+      initialized: !!dbInstance,
+      project: firebaseApp?.options?.projectId,
+      env: { NODE_ENV: process.env.NODE_ENV }
+    });
+  });
+
+  app.post("/api/debug/seed", async (req, res) => {
+    try {
+      await seedInitialData();
+      res.json({ message: "Seeding check completed successfully" });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message, stack: err.stack });
+    }
+  });
+
   app.get("/api/health", async (req, res) => {
     let dbStatus = "Checking...";
     let writeTest = "Skipped";
@@ -61,7 +74,7 @@ async function startServer() {
       if (!dbInstance) {
         dbStatus = "Undefined - Initialization failed";
       } else {
-        await dbInstance.collection('health_test').doc('ping').set({ lastPing: new Date().toISOString() });
+        await setDoc(doc(dbInstance, 'health_test', 'ping'), { lastPing: new Date().toISOString() });
         dbStatus = "Connected & Writing";
         writeTest = "Success";
       }
@@ -73,35 +86,30 @@ async function startServer() {
       status: "ok", 
       time: new Date().toISOString(), 
       databaseStatus: dbStatus,
-      writeTest: writeTest,
-      projectId: admin.apps[0]?.options.projectId || "unknown",
-      databaseId: databaseId || "default"
+      writeTest: writeTest
     });
   });
 
-  // Firestore Helpers
+  // Firestore Helpers (Updated for Client SDK)
   const seedInitialData = async () => {
     try {
-      if (!dbInstance) {
-        console.error("[Seeding] Cannot seed: dbInstance is undefined");
-        return;
-      }
+      if (!dbInstance) return;
       
-      console.log("[Seeding] Starting initial data population...");
-      const masterDoc = await dbInstance.collection('master_store').doc('dropdowns').get();
-      if (!masterDoc.exists) {
+      console.log("[Seeding] Starting check...");
+      const masterDoc = await getDoc(doc(dbInstance, 'master_store', 'dropdowns'));
+      if (!masterDoc.exists()) {
         console.log("[Seeding] Populating master_store...");
-        await dbInstance.collection('master_store').doc('dropdowns').set({
+        await setDoc(doc(dbInstance, 'master_store', 'dropdowns'), {
           shifts: ['A', 'B', 'C'],
           productionTypes: ['Commercial', 'R&D', 'Trial', 'Sample'],
           uoms: ['Kgs', 'Rolls', 'Meter', 'INCH'],
           materials: ['LDPE', 'HDPE', 'LLDPE', 'PP', 'BOPP'],
           inlinePrintOptions: ['Yes', 'No'],
-          years: ['2024', '2025', '2026', '2027']
+          years: ['2023', '2024', '2025', '2026', '2027']
         });
       }
 
-      const machineSnapshot = await dbInstance.collection('machines').limit(1).get();
+      const machineSnapshot = await getDocs(query(collection(dbInstance, 'machines'), limit(1)));
       if (machineSnapshot.empty) {
         console.log("[Seeding] Populating machines collection...");
         const initialMachines = [
@@ -125,14 +133,14 @@ async function startServer() {
           { id: "Ext-19-LD801", type: "LD801", target: 5000, status: "Running", reason: "" },
           { id: "Zipper-01", type: "Zipper", target: 3000, status: "Running", reason: "" },
         ];
-        const batch = dbInstance.batch();
+        const batch = writeBatch(dbInstance);
         for (const m of initialMachines) {
-          batch.set(dbInstance.collection('machines').doc(m.id), m);
+          batch.set(doc(dbInstance, 'machines', m.id), m);
         }
         await batch.commit();
       }
 
-      const operatorSnapshot = await dbInstance.collection('operators').limit(1).get();
+      const operatorSnapshot = await getDocs(query(collection(dbInstance, 'operators'), limit(1)));
       if (operatorSnapshot.empty) {
         console.log("[Seeding] Populating operators collection...");
         const initialOperators = [
@@ -140,59 +148,55 @@ async function startServer() {
           { id: "14", name: "Md. Layes Ali", email: "mdlayeshossain5@gmail.com" },
           { id: "110", name: "Md. Rabiul Islam", email: "mdrobilislam19@gmail.com" },
         ];
-        const batch = dbInstance.batch();
+        const batch = writeBatch(dbInstance);
         for (const o of initialOperators) {
-          batch.set(dbInstance.collection('operators').doc(o.id), o);
+          batch.set(doc(dbInstance, 'operators', o.id), o);
         }
         await batch.commit();
       }
-      console.log("[Seeding] Initial data check completed successfully.");
+      console.log("[Seeding] Database check completed.");
     } catch (error: any) {
-      console.error("[Seeding] FATAL ERROR during seeding:", error.message);
+      console.error("[Seeding] Error:", error.message);
     }
   };
 
-  // Seed initial data asynchronously without blocking startup
   seedInitialData();
 
   const getAppConfig = async () => {
-    const doc = await dbInstance.collection('app_config').doc('sheet').get();
-    return doc.data() || { spreadsheetId: null };
+    const d = await getDoc(doc(dbInstance, 'app_config', 'sheet'));
+    return d.data() || { spreadsheetId: null };
   };
 
   const getRollSettings = async () => {
-    const doc = await dbInstance.collection('app_config').doc('roll_settings').get();
-    return doc.data() || { LAST_ROLL_NO: 17413, PREFIX: "R", CURRENT_YEAR: "26" };
+    const d = await getDoc(doc(dbInstance, 'app_config', 'roll_settings'));
+    return d.data() || { LAST_ROLL_NO: 17413, PREFIX: "R", CURRENT_YEAR: "26" };
   };
 
   const getMasterStore = async () => {
-    const doc = await dbInstance.collection('master_store').doc('dropdowns').get();
-    return doc.data() || {
+    const d = await getDoc(doc(dbInstance, 'master_store', 'dropdowns'));
+    return d.data() || {
       shifts: ['A', 'B', 'C'],
       productionTypes: ['Commercial', 'R&D', 'Trial', 'Sample'],
       uoms: ['Kgs', 'Rolls', 'Meter', 'INCH'],
       materials: ['LDPE', 'HDPE', 'LLDPE', 'PP', 'BOPP'],
       inlinePrintOptions: ['Yes', 'No'],
-      years: ['2024', '2025', '2026', '2027']
+      years: ['2023', '2024', '2025', '2026', '2027']
     };
   };
 
   const getMachines = async () => {
-    const snapshot = await dbInstance.collection('machines').get();
-    if (snapshot.empty) return [];
-    return snapshot.docs.map((doc: any) => doc.data());
+    const s = await getDocs(collection(dbInstance, 'machines'));
+    return s.docs.map(d => d.data());
   };
 
   const getOperators = async () => {
-    const snapshot = await dbInstance.collection('operators').get();
-    if (snapshot.empty) return [];
-    return snapshot.docs.map((doc: any) => doc.data());
+    const s = await getDocs(collection(dbInstance, 'operators'));
+    return s.docs.map(d => d.data());
   };
 
   const syncProductionRecords = async () => {
-    if (!dbInstance) throw new Error("Database not initialized");
-    const snapshot = await dbInstance.collection('production_records').orderBy('EntryTimestamp', 'asc').get();
-    return snapshot.docs.map((doc: any) => doc.data());
+    const s = await getDocs(query(collection(dbInstance, 'production_records'), orderBy('EntryTimestamp', 'asc')));
+    return s.docs.map(d => d.data());
   };
 
   // Google Sheets Helper
@@ -285,7 +289,7 @@ async function startServer() {
     }
 
     if (currentSpreadsheetId) {
-      await dbInstance.collection('app_config').doc('sheet').set({ spreadsheetId: currentSpreadsheetId });
+      await setDoc(doc(dbInstance, 'app_config', 'sheet'), { spreadsheetId: currentSpreadsheetId });
     }
 
     res.json({ spreadsheetId: currentSpreadsheetId, message: existingFile ? "Connected to existing sheet" : "New sheet created and initialized" });
@@ -391,7 +395,7 @@ async function startServer() {
 
   app.post("/api/master-store", safeHandler(async (req, res) => {
     const masterStore = req.body;
-    await dbInstance.collection('master_store').doc('dropdowns').set(masterStore);
+    await setDoc(doc(dbInstance, 'master_store', 'dropdowns'), masterStore);
     res.json({ message: "Master Store updated successfully", masterStore });
   }));
 
@@ -425,7 +429,7 @@ async function startServer() {
       return res.status(400).json({ message: "ID and Name are required" });
     }
     const operator = { id, name, email: email || "" };
-    await dbInstance.collection('operators').doc(id).set(operator);
+    await setDoc(doc(dbInstance, 'operators', id), operator);
     res.json({ message: "Operator saved successfully", operator });
   }));
 
@@ -440,8 +444,8 @@ async function startServer() {
       return res.status(400).json({ message: "ID and Type are required" });
     }
     
-    const doc = await dbInstance.collection('machines').doc(id).get();
-    if (doc.exists) {
+    const d = await getDoc(doc(dbInstance, 'machines', id));
+    if (d.exists()) {
       return res.status(400).json({ message: "Machine ID already exists" });
     }
 
@@ -452,21 +456,21 @@ async function startServer() {
       status: "Idle",
       reason: "Initial Setup"
     };
-    await dbInstance.collection('machines').doc(id).set(newMachine);
+    await setDoc(doc(dbInstance, 'machines', id), newMachine);
     res.json({ message: "Machine created successfully", machine: newMachine });
   }));
 
   app.post("/api/machines/status", safeHandler(async (req, res) => {
     const { id, status, reason, target } = req.body;
-    const docRef = dbInstance.collection('machines').doc(id);
-    const doc = await docRef.get();
-    if (doc.exists) {
+    const docRef = doc(dbInstance, 'machines', id);
+    const d = await getDoc(docRef);
+    if (d.exists()) {
       const updates: any = {};
       if (status) updates.status = status;
       if (reason !== undefined) updates.reason = reason;
       if (target) updates.target = target;
-      await docRef.update(updates);
-      const updated = await docRef.get();
+      await updateDoc(docRef, updates);
+      const updated = await getDoc(docRef);
       res.json({ message: "Machine updated successfully", machine: updated.data() });
     } else {
       res.status(404).json({ message: "Machine not found" });
@@ -517,7 +521,7 @@ async function startServer() {
     const parts = newRollId.split('-');
     if (parts.length === 3) {
       const newLastNo = parseInt(parts[1]);
-      await dbInstance.collection('app_config').doc('roll_settings').set({ LAST_ROLL_NO: newLastNo, PREFIX: parts[0], CURRENT_YEAR: parts[2] }, { merge: true });
+      await setDoc(doc(dbInstance, 'app_config', 'roll_settings'), { LAST_ROLL_NO: newLastNo, PREFIX: parts[0], CURRENT_YEAR: parts[2] }, { merge: true });
     }
     
     const date = new Date(entry.ProductionDate || new Date());
@@ -532,12 +536,12 @@ async function startServer() {
       ProductionMonth: date.toLocaleString('default', { month: 'long' })
     };
     
-    const recordRef = await dbInstance.collection('production_records').add(newEntry);
+    const recordRef = await addDoc(collection(dbInstance, 'production_records'), newEntry);
 
     // Sync to Sheet if token is present
     const accessToken = req.headers["x-google-access-token"] as string;
-    const config = await getAppConfig();
-    const spreadsheetId = config.spreadsheetId;
+    const sheetConfig = await getAppConfig();
+    const spreadsheetId = (sheetConfig as any).spreadsheetId;
     let syncStatus = 'skipped';
     
     if (accessToken && spreadsheetId) {
@@ -559,14 +563,14 @@ async function startServer() {
           }
         });
         syncStatus = 'success';
-        await recordRef.update({ syncStatus: 'success' });
+        await updateDoc(recordRef, { syncStatus: 'success' });
       } catch (err: any) {
         console.error("[Sync] Auto Sync Error:", err.message);
         syncStatus = 'error';
-        await recordRef.update({ syncStatus: 'error' });
+        await updateDoc(recordRef, { syncStatus: 'error' });
       }
     } else {
-      await recordRef.update({ syncStatus: 'skipped' });
+      await updateDoc(recordRef, { syncStatus: 'skipped' });
     }
 
     res.status(201).json({ 
