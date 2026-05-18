@@ -19,7 +19,12 @@ import {
   writeBatch 
 } from "firebase/firestore";
 
+import { fileURLToPath } from 'url';
+
 const app = express();
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 let firebaseApp: any;
 let dbInstance: any;
 
@@ -29,16 +34,30 @@ app.use(express.urlencoded({ extended: true }));
 const initializeFirebase = () => {
   if (dbInstance) return dbInstance;
   try {
-    const configPath = path.resolve(process.cwd(), "firebase-applet-config.json");
-    if (fs.existsSync(configPath)) {
+    const possiblePaths = [
+      path.join(process.cwd(), "firebase-applet-config.json"),
+      path.join(__dirname, "firebase-applet-config.json"),
+      path.join(__dirname, "..", "firebase-applet-config.json")
+    ];
+    
+    let configPath = "";
+    for (const p of possiblePaths) {
+      if (fs.existsSync(p)) {
+        configPath = p;
+        break;
+      }
+    }
+
+    if (configPath) {
+      console.log("[Firebase] Loading config from:", configPath);
       const config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
       firebaseApp = initializeApp(config);
       const dbId = config.firestoreDatabaseId === "(default)" ? undefined : config.firestoreDatabaseId;
       dbInstance = getFirestore(firebaseApp, dbId);
-      console.log("[Firebase] Client SDK initialized. Project:", config.projectId);
+      console.log("[Firebase] Client SDK initialized successfully.");
       return dbInstance;
     } else {
-      console.warn("[Firebase] Config file missing at:", configPath);
+      console.error("[Firebase] Config file not found in any expected location:", possiblePaths);
     }
   } catch (error) {
     console.error("[Firebase] Initialization failed:", error);
@@ -100,13 +119,14 @@ app.get("/api/debug/firebase", async (req, res) => {
     });
   });
 
-  // Firestore Helpers (Updated for Client SDK)
+  // Initialize Firestore Helpers (Updated for Client SDK)
   const seedInitialData = async () => {
     try {
-      if (!dbInstance) return;
+      const db = initializeFirebase();
+      if (!db) return;
       
       console.log("[Seeding] Starting check...");
-      const masterDoc = await getDoc(doc(dbInstance, 'master_store', 'dropdowns'));
+      const masterDoc = await getDoc(doc(db, 'master_store', 'dropdowns'));
       if (!masterDoc.exists()) {
         console.log("[Seeding] Populating master_store...");
         await setDoc(doc(dbInstance, 'master_store', 'dropdowns'), {
@@ -170,7 +190,8 @@ app.get("/api/debug/firebase", async (req, res) => {
     }
   };
 
-  seedInitialData();
+// Seed manually via /api/debug/seed if needed
+// seedInitialData();
 
   const getAppConfig = async () => {
     const d = await getDoc(doc(dbInstance, 'app_config', 'sheet'));
@@ -223,30 +244,37 @@ app.get("/api/debug/firebase", async (req, res) => {
   };
 
   const PRODUCTION_COLUMNS = [
-    "Roll ID", "Production Date", "Shift", "Production Type", "Operator ID", 
-    "Machine no", "Year", "PI NUMBER", "Tube Size", "UOM", "Material", 
-    "Micron", "InLine Print", "Finished Meter", "Finished Kgs", "Roll Location", 
-    "Data Update Time", "Fingerprint", "Entered By", "Operator Name", 
-    "Scrap Kgs", "Production Year", "Production Month"
-  ];
+  "Roll ID", "Production Date", "Shift", "Production Type", "Operator ID", 
+  "Machine no", "Year", "PI NUMBER", "Tube Size", "UOM", "Material", 
+  "Micron", "InLine Print", "Finished Meter", "Finished Kgs", "Roll Location", 
+  "Data Update Time", "Fingerprint", "Entered By", "Operator Name", 
+  "Scrap Kgs", "Production Year", "Production Month"
+];
 
-  const MACHINE_COLUMNS = ["Machine ID", "Type", "Target (KG)", "Status", "Last Reason"];
-  const OPERATOR_COLUMNS = ["Operator ID", "Full Name", "Email Address"];
-  const CONFIG_COLUMNS = ["Category", "Options"];
+const MACHINE_COLUMNS = ["Machine ID", "Type", "Target (KG)", "Status", "Last Reason"];
+const OPERATOR_COLUMNS = ["Operator ID", "Full Name", "Email Address"];
+const CONFIG_COLUMNS = ["Category", "Options"];
 
-  const safeHandler = (fn: (req: any, res: any) => Promise<void>) => async (req: any, res: any, next: any) => {
-    try {
-      await fn(req, res);
-    } catch (err: any) {
-      console.error("[Route Error]", err);
-      res.status(500).json({ error: err.message });
+const safeHandler = (fn: (req: any, res: any) => Promise<void>) => async (req: any, res: any, next: any) => {
+  try {
+    const db = initializeFirebase();
+    if (!db && !req.path.includes('/health') && !req.path.includes('/debug')) {
+      throw new Error("Database initialization failed. Check server logs.");
     }
-  };
+    await fn(req, res);
+  } catch (err: any) {
+    console.error(`[Route Error] ${req.method} ${req.path}:`, err);
+    res.status(500).json({ error: err.message || "Internal Server Error" });
+  }
+};
 
-  app.get("/api/sheets/config", safeHandler(async (req, res) => {
-    const config = await getAppConfig();
-    res.json({ spreadsheetId: config.spreadsheetId });
-  }));
+app.get("/api/sheets/config", safeHandler(async (req, res) => {
+  const db = initializeFirebase();
+  if (!db) throw new Error("DB fail");
+  const d = await getDoc(doc(db, 'app_config', 'sheet'));
+  const config = d.data() || { spreadsheetId: null };
+  res.json({ spreadsheetId: config.spreadsheetId });
+}));
 
   app.post("/api/sheets/init", safeHandler(async (req, res) => {
     const { accessToken } = req.body;
@@ -591,8 +619,14 @@ app.get("/api/debug/firebase", async (req, res) => {
   }));
 
   app.get("/api/dashboard", safeHandler(async (req, res) => {
-    const machineMaster = await getMachines();
-    const masterData = await syncProductionRecords();
+    const db = initializeFirebase();
+    if (!db) throw new Error("Database not initialized");
+
+    const machineSnapshot = await getDocs(collection(db, 'machines'));
+    const machineMaster = machineSnapshot.docs.map(d => d.data());
+    
+    const productionSnapshot = await getDocs(query(collection(db, 'production_records'), orderBy('EntryTimestamp', 'asc')));
+    const masterData = productionSnapshot.docs.map(d => d.data());
 
     const summary = machineMaster.map((m: any) => {
       const machineProduction = masterData.filter((d: any) => d.MachineNo === m.id);
