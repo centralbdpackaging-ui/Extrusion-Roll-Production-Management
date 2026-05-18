@@ -19,38 +19,37 @@ import {
   writeBatch 
 } from "firebase/firestore";
 
-async function startServer() {
-  const app = express();
-  const PORT = 3000;
+const app = express();
+let firebaseApp: any;
+let dbInstance: any;
 
-  app.use(express.json());
-  app.use(express.urlencoded({ extended: true }));
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
-  // Initialize Firebase Client SDK on server to bypass IAM issues with Admin SDK
-  let firebaseApp: any;
-  let dbInstance: any;
-
-  try {
-    const configPath = path.join(process.cwd(), "firebase-applet-config.json");
-    if (fs.existsSync(configPath)) {
-      const config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
-      firebaseApp = initializeApp(config);
-      // Use undefined if firestoreDatabaseId is "(default)" to avoid looking for a database literally named "(default)"
-      const dbId = config.firestoreDatabaseId === "(default)" ? undefined : config.firestoreDatabaseId;
-      dbInstance = getFirestore(firebaseApp, dbId);
-      console.log("[Firebase] Client SDK initialized. Project:", config.projectId, "DB:", dbId || "(default)");
-    } else {
-      console.warn("[Firebase] No config file found for Client SDK");
-    }
-  } catch (error) {
-    console.error("[Firebase] Initialization failed:", error);
+try {
+  const configPath = path.join(process.cwd(), "firebase-applet-config.json");
+  if (fs.existsSync(configPath)) {
+    const config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+    firebaseApp = initializeApp(config);
+    const dbId = config.firestoreDatabaseId === "(default)" ? undefined : config.firestoreDatabaseId;
+    dbInstance = getFirestore(firebaseApp, dbId);
+    console.log("[Firebase] Client SDK initialized. Project:", config.projectId, "DB:", dbId || "(default)");
+  } else {
+    console.warn("[Firebase] No config file found for Client SDK");
   }
+} catch (error) {
+  console.error("[Firebase] Initialization failed:", error);
+}
 
-  // Global Error Handler
-  app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
-    console.error("[Global Error]", err);
-    res.status(500).json({ error: "Internal Server Error", message: err.message });
-  });
+// Global Error Handler
+app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+  console.error("[Global Error]", err);
+  res.status(500).json({ error: "Internal Server Error", message: err.message });
+});
+
+export { app };
+
+const PORT = process.env.PORT || 3000;
 
   app.get("/api/debug/firebase", async (req, res) => {
     res.json({
@@ -610,14 +609,15 @@ async function startServer() {
     });
   }));
 
-  // Vite middleware for development
-  if (process.env.NODE_ENV !== "production") {
+(async () => {
+  // Vite middleware for development - skip in Vercel environment where static is handled differently
+  if (process.env.NODE_ENV !== "production" && !process.env.VERCEL) {
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
     });
     app.use(vite.middlewares);
-  } else {
+  } else if (!process.env.VERCEL) {
     const distPath = path.join(process.cwd(), 'dist');
     app.use(express.static(distPath));
     app.get('*', (req, res) => {
@@ -625,9 +625,9 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://localhost:${PORT}`);
-  });
-}
-
-startServer();
+  if (!process.env.VERCEL) {
+    app.listen(PORT, "0.0.0.0", () => {
+      console.log(`Server running on http://localhost:${PORT}`);
+    });
+  }
+})();
