@@ -26,20 +26,28 @@ let dbInstance: any;
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-try {
-  const configPath = path.join(process.cwd(), "firebase-applet-config.json");
-  if (fs.existsSync(configPath)) {
-    const config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
-    firebaseApp = initializeApp(config);
-    const dbId = config.firestoreDatabaseId === "(default)" ? undefined : config.firestoreDatabaseId;
-    dbInstance = getFirestore(firebaseApp, dbId);
-    console.log("[Firebase] Client SDK initialized. Project:", config.projectId, "DB:", dbId || "(default)");
-  } else {
-    console.warn("[Firebase] No config file found for Client SDK");
+const initializeFirebase = () => {
+  if (dbInstance) return dbInstance;
+  try {
+    const configPath = path.resolve(process.cwd(), "firebase-applet-config.json");
+    if (fs.existsSync(configPath)) {
+      const config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+      firebaseApp = initializeApp(config);
+      const dbId = config.firestoreDatabaseId === "(default)" ? undefined : config.firestoreDatabaseId;
+      dbInstance = getFirestore(firebaseApp, dbId);
+      console.log("[Firebase] Client SDK initialized. Project:", config.projectId);
+      return dbInstance;
+    } else {
+      console.warn("[Firebase] Config file missing at:", configPath);
+    }
+  } catch (error) {
+    console.error("[Firebase] Initialization failed:", error);
   }
-} catch (error) {
-  console.error("[Firebase] Initialization failed:", error);
-}
+  return null;
+};
+
+// Initialize early
+initializeFirebase();
 
 // Global Error Handler
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
@@ -51,13 +59,14 @@ export { app };
 
 const PORT = process.env.PORT || 3000;
 
-  app.get("/api/debug/firebase", async (req, res) => {
-    res.json({
-      initialized: !!dbInstance,
-      project: firebaseApp?.options?.projectId,
-      env: { NODE_ENV: process.env.NODE_ENV }
-    });
+app.get("/api/debug/firebase", async (req, res) => {
+  const db = initializeFirebase();
+  res.json({
+    initialized: !!db,
+    project: firebaseApp?.options?.projectId,
+    env: { NODE_ENV: process.env.NODE_ENV }
   });
+});
 
   app.post("/api/debug/seed", async (req, res) => {
     try {
