@@ -35,8 +35,10 @@ async function startServer() {
     if (fs.existsSync(configPath)) {
       const config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
       firebaseApp = initializeApp(config);
-      dbInstance = getFirestore(firebaseApp, config.firestoreDatabaseId);
-      console.log("[Firebase] Client SDK initialized. Project:", config.projectId);
+      // Use undefined if firestoreDatabaseId is "(default)" to avoid looking for a database literally named "(default)"
+      const dbId = config.firestoreDatabaseId === "(default)" ? undefined : config.firestoreDatabaseId;
+      dbInstance = getFirestore(firebaseApp, dbId);
+      console.log("[Firebase] Client SDK initialized. Project:", config.projectId, "DB:", dbId || "(default)");
     } else {
       console.warn("[Firebase] No config file found for Client SDK");
     }
