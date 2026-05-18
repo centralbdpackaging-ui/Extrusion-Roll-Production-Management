@@ -2,7 +2,6 @@ import express from "express";
 import path from "path";
 import fs from "fs";
 import { createServer as createViteServer } from "vite";
-import { google } from "googleapis";
 import { initializeApp } from "firebase/app";
 import { 
   getFirestore, 
@@ -22,8 +21,9 @@ import {
 import { fileURLToPath } from 'url';
 
 const app = express();
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+// Fallback for __dirname and __filename in ESM
+const _filename = typeof __filename !== 'undefined' ? __filename : fileURLToPath(import.meta.url);
+const _dirname = typeof __dirname !== 'undefined' ? __dirname : path.dirname(_filename);
 
 let firebaseApp: any;
 let dbInstance: any;
@@ -36,8 +36,9 @@ const initializeFirebase = () => {
   try {
     const possiblePaths = [
       path.join(process.cwd(), "firebase-applet-config.json"),
-      path.join(__dirname, "firebase-applet-config.json"),
-      path.join(__dirname, "..", "firebase-applet-config.json")
+      path.join(_dirname, "firebase-applet-config.json"),
+      path.join(_dirname, "..", "firebase-applet-config.json"),
+      "/var/task/firebase-applet-config.json"
     ];
     
     let configPath = "";
@@ -54,10 +55,16 @@ const initializeFirebase = () => {
       firebaseApp = initializeApp(config);
       const dbId = config.firestoreDatabaseId === "(default)" ? undefined : config.firestoreDatabaseId;
       dbInstance = getFirestore(firebaseApp, dbId);
-      console.log("[Firebase] Client SDK initialized successfully.");
       return dbInstance;
     } else {
-      console.error("[Firebase] Config file not found in any expected location:", possiblePaths);
+      // Fallback to environment variables if file is missing in serverless
+      if (process.env.FIREBASE_CONFIG_JSON) {
+         const config = JSON.parse(process.env.FIREBASE_CONFIG_JSON);
+         firebaseApp = initializeApp(config);
+         dbInstance = getFirestore(firebaseApp);
+         return dbInstance;
+      }
+      console.error("[Firebase] Config missing. Expected at:", possiblePaths);
     }
   } catch (error) {
     console.error("[Firebase] Initialization failed:", error);
@@ -193,18 +200,15 @@ app.get("/api/debug/firebase", async (req, res) => {
 // Seed manually via /api/debug/seed if needed
 // seedInitialData();
 
-  const getAppConfig = async () => {
-    const d = await getDoc(doc(dbInstance, 'app_config', 'sheet'));
-    return d.data() || { spreadsheetId: null };
-  };
-
   const getRollSettings = async () => {
-    const d = await getDoc(doc(dbInstance, 'app_config', 'roll_settings'));
+    const db = initializeFirebase();
+    const d = await getDoc(doc(db, 'app_config', 'roll_settings'));
     return d.data() || { LAST_ROLL_NO: 17413, PREFIX: "R", CURRENT_YEAR: "26" };
   };
 
   const getMasterStore = async () => {
-    const d = await getDoc(doc(dbInstance, 'master_store', 'dropdowns'));
+    const db = initializeFirebase();
+    const d = await getDoc(doc(db, 'master_store', 'dropdowns'));
     return d.data() || {
       shifts: ['A', 'B', 'C'],
       productionTypes: ['Commercial', 'R&D', 'Trial', 'Sample'],
@@ -216,17 +220,20 @@ app.get("/api/debug/firebase", async (req, res) => {
   };
 
   const getMachines = async () => {
-    const s = await getDocs(collection(dbInstance, 'machines'));
+    const db = initializeFirebase();
+    const s = await getDocs(collection(db, 'machines'));
     return s.docs.map(d => d.data());
   };
 
   const getOperators = async () => {
-    const s = await getDocs(collection(dbInstance, 'operators'));
+    const db = initializeFirebase();
+    const s = await getDocs(collection(db, 'operators'));
     return s.docs.map(d => d.data());
   };
 
   const syncProductionRecords = async () => {
-    const s = await getDocs(query(collection(dbInstance, 'production_records'), orderBy('EntryTimestamp', 'asc')));
+    const db = initializeFirebase();
+    const s = await getDocs(query(collection(db, 'production_records'), orderBy('EntryTimestamp', 'asc')));
     return s.docs.map(d => d.data());
   };
 
@@ -268,163 +275,6 @@ const safeHandler = (fn: (req: any, res: any) => Promise<void>) => async (req: a
   }
 };
 
-app.get("/api/sheets/config", safeHandler(async (req, res) => {
-  const db = initializeFirebase();
-  if (!db) throw new Error("DB fail");
-  const d = await getDoc(doc(db, 'app_config', 'sheet'));
-  const config = d.data() || { spreadsheetId: null };
-  res.json({ spreadsheetId: config.spreadsheetId });
-}));
-
-  app.post("/api/sheets/init", safeHandler(async (req, res) => {
-    const { accessToken } = req.body;
-    if (!accessToken) return res.status(401).json({ error: "No access token" });
-
-    const drive = getDriveClient(accessToken);
-    const sheets = getSheetsClient(accessToken);
-    const sheetName = "Master Production Record";
-
-    // Search for existing sheet with this name
-    const searchResponse = await drive.files.list({
-      q: `name = '${sheetName}' and mimeType = 'application/vnd.google-apps.spreadsheet' and trashed = false`,
-      fields: "files(id, name)",
-      spaces: "drive"
-    });
-
-    const existingFile = searchResponse.data.files?.[0];
-    let currentSpreadsheetId = existingFile?.id || null;
-
-    if (!currentSpreadsheetId) {
-      // Create new spreadsheet if not found
-      const createResponse = await sheets.spreadsheets.create({
-        requestBody: {
-          properties: { title: sheetName },
-          sheets: [
-            { properties: { title: "Records" } },
-            { properties: { title: "Machines" } },
-            { properties: { title: "Operators" } },
-            { properties: { title: "Dropdown_Config" } }
-          ]
-        }
-      });
-      currentSpreadsheetId = createResponse.data.spreadsheetId || null;
-
-      if (currentSpreadsheetId) {
-        // Initialize Headers
-        await sheets.spreadsheets.values.batchUpdate({
-          spreadsheetId: currentSpreadsheetId,
-          requestBody: {
-            valueInputOption: "RAW",
-            data: [
-              { range: "Records!A1", values: [PRODUCTION_COLUMNS] },
-              { range: "Machines!A1", values: [MACHINE_COLUMNS] },
-              { range: "Operators!A1", values: [OPERATOR_COLUMNS] },
-              { range: "Dropdown_Config!A1", values: [CONFIG_COLUMNS] }
-            ]
-          }
-        });
-      }
-    }
-
-    if (currentSpreadsheetId) {
-      await setDoc(doc(dbInstance, 'app_config', 'sheet'), { spreadsheetId: currentSpreadsheetId });
-    }
-
-    res.json({ spreadsheetId: currentSpreadsheetId, message: existingFile ? "Connected to existing sheet" : "New sheet created and initialized" });
-  }));
-
-  app.post("/api/sheets/sync-all", safeHandler(async (req, res) => {
-    const { accessToken } = req.body;
-    const config = await getAppConfig();
-    const spreadsheetId = config.spreadsheetId;
-
-    if (!accessToken) return res.status(401).json({ error: "No access token" });
-    if (!spreadsheetId) return res.status(400).json({ error: "No sheet initialized" });
-
-    const sheets = getSheetsClient(accessToken);
-    const masterData = await syncProductionRecords();
-    
-    const values = masterData.map((entry: any) => [
-      entry.RollID, entry.ProductionDate, entry.Shift, entry.ProductionType, entry.OperatorID,
-      entry.MachineNo, entry.Year, entry.PINumber, entry.TubeSize, entry.UOM, entry.Material,
-      entry.Micron, entry.InLinePrint, entry.FinishedMeter, entry.FinishedKgs, entry.RollLocation,
-      entry.DataUpdateTime, entry.Fingerprint, entry.EnteredBy, entry.OperatorName,
-      entry.ScrapKgs, entry.ProductionYear, entry.ProductionMonth
-    ]);
-
-    // Clear existing and rewrite
-    await sheets.spreadsheets.values.clear({ spreadsheetId, range: "Records!A2:Z10000" });
-    
-    if (values.length > 0) {
-      await sheets.spreadsheets.values.update({
-        spreadsheetId,
-        range: "Records!A2",
-        valueInputOption: "RAW",
-        requestBody: { values }
-      });
-    }
-
-    res.json({ message: "Full sync completed" });
-  }));
-
-  app.post("/api/sheets/sync-master", safeHandler(async (req, res) => {
-    const { accessToken } = req.body;
-    const config = await getAppConfig();
-    const spreadsheetId = config.spreadsheetId;
-
-    if (!accessToken) return res.status(401).json({ error: "No access token" });
-    if (!spreadsheetId) return res.status(400).json({ error: "No sheet initialized" });
-
-    const sheets = getSheetsClient(accessToken);
-    const machineMaster = await getMachines();
-    const operatorMaster = await getOperators();
-    const masterStore = await getMasterStore();
-
-    // Verify tabs exist, create if missing
-    const spreadsheet = await sheets.spreadsheets.get({ spreadsheetId });
-    const existingTitles = spreadsheet.data.sheets?.map(s => s.properties?.title) || [];
-    const requiredTabs = ["Machines", "Operators", "Dropdown_Config"];
-    const missingTabs = requiredTabs.filter(t => !existingTitles.includes(t));
-
-    if (missingTabs.length > 0) {
-      await sheets.spreadsheets.batchUpdate({
-        spreadsheetId,
-        requestBody: {
-          requests: missingTabs.map(title => ({
-            addSheet: { properties: { title } }
-          }))
-        }
-      });
-    }
-
-    // Prepare Data
-    const machineValues = machineMaster.map((m: any) => [m.id, m.type, m.target, m.status, m.reason]);
-    const operatorValues = operatorMaster.map((o: any) => [o.id, o.name, o.email]);
-    const configValues = [
-      ["Shifts", (masterStore as any).shifts.join(", ")],
-      ["Production Types", (masterStore as any).productionTypes.join(", ")],
-      ["UOMs", (masterStore as any).uoms.join(", ")],
-      ["Materials", (masterStore as any).materials.join(", ")],
-      ["Inline Print", (masterStore as any).inlinePrintOptions.join(", ")],
-      ["Years", (masterStore as any).years.join(", ")]
-    ];
-
-    // Perform updates
-    await sheets.spreadsheets.values.batchUpdate({
-      spreadsheetId,
-      requestBody: {
-        valueInputOption: "RAW",
-        data: [
-          { range: "Machines!A1", values: [MACHINE_COLUMNS, ...machineValues] },
-          { range: "Operators!A1", values: [OPERATOR_COLUMNS, ...operatorValues] },
-          { range: "Dropdown_Config!A1", values: [CONFIG_COLUMNS, ...configValues] }
-        ]
-      }
-    });
-
-    res.json({ message: "Master Data synced successfully" });
-  }));
-
   // API Routes
   app.get("/api/master-store", safeHandler(async (req, res) => {
     const masterStore = await getMasterStore();
@@ -432,8 +282,9 @@ app.get("/api/sheets/config", safeHandler(async (req, res) => {
   }));
 
   app.post("/api/master-store", safeHandler(async (req, res) => {
+    const db = initializeFirebase();
     const masterStore = req.body;
-    await setDoc(doc(dbInstance, 'master_store', 'dropdowns'), masterStore);
+    await setDoc(doc(db, 'master_store', 'dropdowns'), masterStore);
     res.json({ message: "Master Store updated successfully", masterStore });
   }));
 
@@ -462,12 +313,13 @@ app.get("/api/sheets/config", safeHandler(async (req, res) => {
   }));
 
   app.post("/api/operators", safeHandler(async (req, res) => {
+    const db = initializeFirebase();
     const { id, name, email } = req.body;
     if (!id || !name) {
       return res.status(400).json({ message: "ID and Name are required" });
     }
     const operator = { id, name, email: email || "" };
-    await setDoc(doc(dbInstance, 'operators', id), operator);
+    await setDoc(doc(db, 'operators', id), operator);
     res.json({ message: "Operator saved successfully", operator });
   }));
 
@@ -477,12 +329,13 @@ app.get("/api/sheets/config", safeHandler(async (req, res) => {
   }));
 
   app.post("/api/machines", safeHandler(async (req, res) => {
+    const db = initializeFirebase();
     const { id, type, target } = req.body;
     if (!id || !type) {
       return res.status(400).json({ message: "ID and Type are required" });
     }
     
-    const d = await getDoc(doc(dbInstance, 'machines', id));
+    const d = await getDoc(doc(db, 'machines', id));
     if (d.exists()) {
       return res.status(400).json({ message: "Machine ID already exists" });
     }
@@ -494,13 +347,14 @@ app.get("/api/sheets/config", safeHandler(async (req, res) => {
       status: "Idle",
       reason: "Initial Setup"
     };
-    await setDoc(doc(dbInstance, 'machines', id), newMachine);
+    await setDoc(doc(db, 'machines', id), newMachine);
     res.json({ message: "Machine created successfully", machine: newMachine });
   }));
 
   app.post("/api/machines/status", safeHandler(async (req, res) => {
+    const db = initializeFirebase();
     const { id, status, reason, target } = req.body;
-    const docRef = doc(dbInstance, 'machines', id);
+    const docRef = doc(db, 'machines', id);
     const d = await getDoc(docRef);
     if (d.exists()) {
       const updates: any = {};
@@ -550,6 +404,7 @@ app.get("/api/sheets/config", safeHandler(async (req, res) => {
   }));
 
   app.post("/api/production", safeHandler(async (req, res) => {
+    const db = initializeFirebase();
     const entry = req.body;
     
     // Auto-generate unique Roll ID on server
@@ -559,7 +414,7 @@ app.get("/api/sheets/config", safeHandler(async (req, res) => {
     const parts = newRollId.split('-');
     if (parts.length === 3) {
       const newLastNo = parseInt(parts[1]);
-      await setDoc(doc(dbInstance, 'app_config', 'roll_settings'), { LAST_ROLL_NO: newLastNo, PREFIX: parts[0], CURRENT_YEAR: parts[2] }, { merge: true });
+      await setDoc(doc(db, 'app_config', 'roll_settings'), { LAST_ROLL_NO: newLastNo, PREFIX: parts[0], CURRENT_YEAR: parts[2] }, { merge: true });
     }
     
     const date = new Date(entry.ProductionDate || new Date());
@@ -574,47 +429,11 @@ app.get("/api/sheets/config", safeHandler(async (req, res) => {
       ProductionMonth: date.toLocaleString('default', { month: 'long' })
     };
     
-    const recordRef = await addDoc(collection(dbInstance, 'production_records'), newEntry);
-
-    // Sync to Sheet if token is present
-    const accessToken = req.headers["x-google-access-token"] as string;
-    const sheetConfig = await getAppConfig();
-    const spreadsheetId = (sheetConfig as any).spreadsheetId;
-    let syncStatus = 'skipped';
-    
-    if (accessToken && spreadsheetId) {
-      try {
-        const sheets = getSheetsClient(accessToken);
-        await sheets.spreadsheets.values.append({
-          spreadsheetId,
-          range: "Records!A1",
-          valueInputOption: "RAW",
-          insertDataOption: "INSERT_ROWS",
-          requestBody: {
-            values: [[
-              newEntry.RollID, newEntry.ProductionDate, newEntry.Shift, newEntry.ProductionType, newEntry.OperatorID,
-              newEntry.MachineNo, newEntry.Year, newEntry.PINumber, newEntry.TubeSize, newEntry.UOM, newEntry.Material,
-              newEntry.Micron, newEntry.InLinePrint, newEntry.FinishedMeter, newEntry.FinishedKgs, newEntry.RollLocation,
-              newEntry.DataUpdateTime, newEntry.Fingerprint, newEntry.EnteredBy, newEntry.OperatorName,
-              newEntry.ScrapKgs, newEntry.ProductionYear, newEntry.ProductionMonth
-            ]]
-          }
-        });
-        syncStatus = 'success';
-        await updateDoc(recordRef, { syncStatus: 'success' });
-      } catch (err: any) {
-        console.error("[Sync] Auto Sync Error:", err.message);
-        syncStatus = 'error';
-        await updateDoc(recordRef, { syncStatus: 'error' });
-      }
-    } else {
-      await updateDoc(recordRef, { syncStatus: 'skipped' });
-    }
+    await addDoc(collection(db, 'production_records'), newEntry);
 
     res.status(201).json({ 
       message: "Production Entry Saved Successfully", 
-      entry: { ...newEntry, syncStatus },
-      syncStatus 
+      entry: newEntry 
     });
   }));
 
