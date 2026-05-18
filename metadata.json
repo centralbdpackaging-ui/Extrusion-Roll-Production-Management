@@ -1,0 +1,8 @@
+{
+  "name": "MAINETTI: Industrial Production Systems",
+  "description": "Enterprise-grade production monitoring and data entry manifest designed for Mainetti industrial standards. Integrated with real-time analytics and hardware registry.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
