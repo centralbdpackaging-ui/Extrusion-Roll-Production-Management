@@ -1,0 +1,96 @@
+{
+  "entities": {
+    "SheetConfig": {
+      "title": "Sheet Config",
+      "description": "Configuration for Google Sheets integration",
+      "type": "object",
+      "properties": {
+        "spreadsheetId": { "type": "string" }
+      },
+      "required": ["spreadsheetId"]
+    },
+    "RollSettings": {
+      "title": "Roll Settings",
+      "description": "Settings for generating next Roll ID",
+      "type": "object",
+      "properties": {
+        "LAST_ROLL_NO": { "type": "number" },
+        "PREFIX": { "type": "string" },
+        "CURRENT_YEAR": { "type": "string" }
+      }
+    },
+    "MasterStore": {
+      "title": "Master Store",
+      "description": "Dropdown options and configurations",
+      "type": "object",
+      "properties": {
+        "shifts": { "type": "array" },
+        "productionTypes": { "type": "array" },
+        "uoms": { "type": "array" },
+        "materials": { "type": "array" },
+        "inlinePrintOptions": { "type": "array" },
+        "years": { "type": "array" }
+      }
+    },
+    "Machine": {
+      "title": "Machine",
+      "description": "Industrial machine registry",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "type": { "type": "string" },
+        "target": { "type": "number" },
+        "status": { "type": "string" },
+        "reason": { "type": "string" }
+      }
+    },
+    "Operator": {
+      "title": "Operator",
+      "description": "Production operator registry",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "email": { "type": "string" }
+      }
+    },
+    "ProductionRecord": {
+      "title": "Production Record",
+      "description": "Historical production log",
+      "type": "object",
+      "properties": {
+        "RollID": { "type": "string" },
+        "ProductionDate": { "type": "string" },
+        "Shift": { "type": "string" },
+        "ProductionType": { "type": "string" },
+        "OperatorID": { "type": "string" },
+        "MachineNo": { "type": "string" },
+        "Year": { "type": "string" },
+        "PINumber": { "type": "string" },
+        "TubeSize": { "type": "string" },
+        "UOM": { "type": "string" },
+        "Material": { "type": "string" },
+        "Micron": { "type": "number" },
+        "InLinePrint": { "type": "string" },
+        "FinishedMeter": { "type": "number" },
+        "FinishedKgs": { "type": "number" },
+        "RollLocation": { "type": "string" },
+        "DataUpdateTime": { "type": "string" },
+        "Fingerprint": { "type": "string" },
+        "EnteredBy": { "type": "string" },
+        "OperatorName": { "type": "string" },
+        "ScrapKgs": { "type": "number" },
+        "ProductionYear": { "type": "string" },
+        "ProductionMonth": { "type": "string" }
+      }
+    }
+  },
+  "firestore": {
+    "/app_config/sheet": { "schema": "SheetConfig", "description": "Google Sheet ID" },
+    "/app_config/roll_settings": { "schema": "RollSettings", "description": "Roll numbering settings" },
+    "/master_store/dropdowns": { "schema": "MasterStore", "description": "Master lists for dropdowns" },
+    "/machines/{machineId}": { "schema": "Machine", "description": "Machine data" },
+    "/operators/{operatorId}": { "schema": "Operator", "description": "Operator data" },
+    "/production_records/{recordId}": { "schema": "ProductionRecord", "description": "Production history" }
+  }
+}

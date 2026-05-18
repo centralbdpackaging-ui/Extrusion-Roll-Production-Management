@@ -153,6 +153,7 @@ export default function App() {
     years: []
   });
 
+  const [fetchError, setFetchError] = useState<string | null>(null);
   const [modalConfig, setModalConfig] = useState<{ isOpen: boolean, type: string, title: string } | null>(null);
   const [newMasterItem, setNewMasterItem] = useState("");
   
@@ -174,7 +175,9 @@ export default function App() {
     try {
       const res = await fetch('/api/sheets/config');
       const data = await res.json();
-      setSpreadsheetId(data.spreadsheetId);
+      if (res.ok && data.spreadsheetId) {
+        setSpreadsheetId(data.spreadsheetId);
+      }
     } catch (err) {
       console.error("Failed to fetch sheet config", err);
     }
@@ -294,14 +297,30 @@ export default function App() {
   });
 
   useEffect(() => {
-    fetchDashboard();
-    fetchMachines();
-    fetchOperators();
-    fetchRecentEntries();
-    fetchProductionRecords();
-    fetchNextRollId();
-    fetchPreviousRollId();
-    fetchMasterStore();
+    const initFetch = async () => {
+      setIsLoading(true);
+      setFetchError(null);
+      try {
+        await Promise.all([
+          fetchDashboard(),
+          fetchMachines(),
+          fetchOperators(),
+          fetchRecentEntries(),
+          fetchProductionRecords(),
+          fetchNextRollId(),
+          fetchPreviousRollId(),
+          fetchMasterStore(),
+          fetchSheetConfig()
+        ]);
+      } catch (err: any) {
+        setFetchError("ডিপেনডেন্সি লোড করতে সমস্যা হয়েছে। ডাটাবেস এরর হতে পারে।");
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    initFetch();
+
     const interval = setInterval(() => {
       fetchDashboard();
       fetchRecentEntries();
@@ -315,7 +334,9 @@ export default function App() {
     try {
       const res = await fetch('/api/master-store');
       const data = await res.json();
-      setMasterStore(data);
+      if (res.ok) {
+        setMasterStore(data);
+      }
     } catch (err) {
       console.error("Failed to fetch master store", err);
     }
@@ -325,7 +346,11 @@ export default function App() {
     try {
       const res = await fetch('/api/dashboard');
       const data = await res.json();
-      setDashboardData(data);
+      if (res.ok) {
+        setDashboardData(data);
+      } else {
+        console.error("Dashboard API error:", data.error);
+      }
     } catch (err) {
       console.error("Failed to fetch dashboard", err);
     }
@@ -335,11 +360,17 @@ export default function App() {
     try {
       const res = await fetch('/api/production');
       const data = await res.json();
-      // Sort by timestamp descending and take last 3
-      const sorted = [...data].sort((a, b) => new Date(b.EntryTimestamp).getTime() - new Date(a.EntryTimestamp).getTime());
-      setRecentEntries(sorted.slice(0, 5)); // We can show 3-5
+      if (res.ok && Array.isArray(data)) {
+        // Sort by timestamp descending and take last 3
+        const sorted = [...data].sort((a, b) => new Date(b.EntryTimestamp).getTime() - new Date(a.EntryTimestamp).getTime());
+        setRecentEntries(sorted.slice(0, 5)); // We can show 3-5
+      } else {
+        console.error("Production API error or non-array data:", data);
+        setRecentEntries([]);
+      }
     } catch (err) {
       console.error("Failed to fetch recent entries", err);
+      setRecentEntries([]);
     }
   };
 
@@ -347,10 +378,15 @@ export default function App() {
     try {
       const res = await fetch('/api/production');
       const data = await res.json();
-      const sorted = [...data].sort((a, b) => new Date(b.EntryTimestamp).getTime() - new Date(a.EntryTimestamp).getTime());
-      setProductionRecords(sorted);
+      if (res.ok && Array.isArray(data)) {
+        const sorted = [...data].sort((a, b) => new Date(b.EntryTimestamp).getTime() - new Date(a.EntryTimestamp).getTime());
+        setProductionRecords(sorted);
+      } else {
+        setProductionRecords([]);
+      }
     } catch (err) {
       console.error("Failed to fetch production records", err);
+      setProductionRecords([]);
     }
   };
 
@@ -358,7 +394,9 @@ export default function App() {
     try {
       const res = await fetch('/api/next-roll-id');
       const data = await res.json();
-      setNextRollId(data.nextId);
+      if (res.ok && data.nextId) {
+        setNextRollId(data.nextId);
+      }
     } catch (err) {
       console.error("Failed to fetch next roll id", err);
     }
@@ -368,7 +406,9 @@ export default function App() {
     try {
       const res = await fetch('/api/previous-roll-id');
       const data = await res.json();
-      setPreviousRollId(data.previousId);
+      if (res.ok && data.previousId) {
+        setPreviousRollId(data.previousId);
+      }
     } catch (err) {
       console.error("Failed to fetch previous roll id", err);
     }
@@ -378,9 +418,14 @@ export default function App() {
     try {
       const res = await fetch('/api/machines');
       const data = await res.json();
-      setMachines(data);
+      if (res.ok && Array.isArray(data)) {
+        setMachines(data);
+      } else {
+        setMachines([]);
+      }
     } catch (err) {
       console.error("Failed to fetch machines", err);
+      setMachines([]);
     }
   };
 
@@ -388,9 +433,14 @@ export default function App() {
     try {
       const res = await fetch('/api/operators');
       const data = await res.json();
-      setOperators(data);
+      if (res.ok && Array.isArray(data)) {
+        setOperators(data);
+      } else {
+        setOperators([]);
+      }
     } catch (err) {
       console.error("Failed to fetch operators", err);
+      setOperators([]);
     }
   };
 
@@ -624,6 +674,10 @@ export default function App() {
                activeTab === 'master-config' ? 'Master Data Table' : 
                activeTab === 'operators' ? 'Operator Management' : 'Asset Registry'}
             </h2>
+            <div className="flex items-center gap-2 px-2 py-0.5 rounded bg-emerald-50 border border-emerald-100">
+               <Database size={10} className="text-emerald-500" />
+               <span className="text-[9px] font-black text-emerald-600 uppercase tracking-tighter">Firestore Active</span>
+            </div>
             <div className="h-4 w-[1px] bg-slate-200" />
             <div className="flex items-center gap-2 text-slate-400 text-[10px] font-mono font-bold uppercase">
               <Clock size={14} className="text-brand-primary" />
@@ -632,7 +686,7 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-6">
-            {dashboardData && (
+            {dashboardData && dashboardData.dailyTotals && (
               <div className="hidden xl:flex items-center gap-8">
                 <MetricHead label="TOTAL KG" value={`${dashboardData.dailyTotals.totalKgs}`} unit="KG" />
                 <MetricHead label="EFFICIENCY" value="94.2" unit="%" color="text-brand-success" />
@@ -649,6 +703,38 @@ export default function App() {
         </header>
 
         <section className="flex-1 p-8 overflow-y-auto">
+          {fetchError && (
+            <div className="mb-6 p-4 bg-rose-50 border border-rose-100 rounded-2xl flex items-center justify-between shadow-sm animate-in fade-in slide-in-from-top-2">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-full bg-rose-100 flex items-center justify-center text-rose-500">
+                  <AlertCircle size={20} />
+                </div>
+                <div>
+                  <p className="text-sm font-bold text-rose-900">কানেকশন এরর</p>
+                  <p className="text-xs text-rose-600">{fetchError}</p>
+                </div>
+              </div>
+              <button 
+                onClick={() => window.location.reload()}
+                className="px-4 py-2 bg-rose-500 hover:bg-rose-600 text-white text-xs font-bold uppercase tracking-widest rounded-xl transition-all shadow-lg shadow-rose-200 active:scale-95"
+              >
+                রিফ্রেশ করুন
+              </button>
+            </div>
+          )}
+
+          {isLoading && (
+            <div className="mb-6 p-4 bg-indigo-50 border border-indigo-100 rounded-2xl flex items-center gap-4 animate-pulse">
+              <div className="w-10 h-10 rounded-full bg-indigo-100 flex items-center justify-center">
+                <div className="w-5 h-5 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+              </div>
+              <div>
+                <p className="text-sm font-bold text-indigo-900">ডাটাবেস কানেক্ট হচ্ছে...</p>
+                <p className="text-xs text-indigo-600">অনুগ্রহ করে কয়েক সেকেন্ড অপেক্ষা করুন।</p>
+              </div>
+            </div>
+          )}
+
           <AnimatePresence mode="wait">
             {activeTab === 'dashboard' && (
               <motion.div 
@@ -662,21 +748,21 @@ export default function App() {
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
                    <StatCard 
                     title="Shift Production" 
-                    value={dashboardData ? `${dashboardData.dailyTotals.totalKgs}` : '--'} 
+                    value={(dashboardData && dashboardData.dailyTotals) ? `${dashboardData.dailyTotals.totalKgs}` : '--'} 
                     unit="KGS" 
                     trend="+12% from avg" 
                     icon={<TrendingUp className="text-emerald-400" />} 
                   />
                    <StatCard 
                     title="Completed Rolls" 
-                    value={dashboardData ? `${dashboardData.dailyTotals.totalRolls}` : '--'} 
+                    value={(dashboardData && dashboardData.dailyTotals) ? `${dashboardData.dailyTotals.totalRolls}` : '--'} 
                     unit="ROLLS" 
                     trend="Ahead of target" 
                     icon={<Package className="text-blue-400" />} 
                   />
                    <StatCard 
                     title="Total Meterage" 
-                    value={dashboardData ? `${dashboardData.dailyTotals.totalMeter}` : '--'} 
+                    value={(dashboardData && dashboardData.dailyTotals) ? `${dashboardData.dailyTotals.totalMeter}` : '--'} 
                     unit="METER" 
                     trend="Steady run rate" 
                     icon={<Ruler className="text-amber-400" />} 
