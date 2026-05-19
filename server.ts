@@ -67,9 +67,10 @@ const initializeFirebase = () => {
       dbInstance = getFirestore(firebaseApp, dbId);
       return dbInstance;
     } else {
-      console.error("[Firebase] CRITICAL ERROR: Database config not found!");
-      console.error("Checked paths:", possiblePaths);
-      console.error("Action Required: Add FIREBASE_CONFIG_JSON to your environment variables.");
+      console.error("[Firebase] CRITICAL ERROR: Database config not found in files or environment variables!");
+      console.error("To fix this, go to your Vercel Project Settings > Environment Variables and add a new secret:");
+      console.error("Key: FIREBASE_CONFIG_JSON");
+      console.error("Value: (Copy the contents of your firebase-applet-config.json file)");
     }
   } catch (error: any) {
     console.error("[Firebase] Initialization failed with error:", error.message);
@@ -264,7 +265,10 @@ const safeHandler = (fn: (req: any, res: any) => Promise<void>) => async (req: a
   try {
     const db = initializeFirebase();
     if (!db && !req.path.includes('/health') && !req.path.includes('/debug')) {
-      throw new Error("Database initialization failed. Check server logs.");
+      return res.status(503).json({ 
+        error: "Database Connection Failed", 
+        message: "Firebase is not initialized. If you are on Vercel, you MUST add 'FIREBASE_CONFIG_JSON' environment variable. Check your server logs for more details." 
+      });
     }
     await fn(req, res);
   } catch (err: any) {
