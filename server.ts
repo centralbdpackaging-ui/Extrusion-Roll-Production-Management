@@ -1,7 +1,6 @@
 import express from "express";
 import path from "path";
 import fs from "fs";
-import { createServer as createViteServer } from "vite";
 import { initializeApp } from "firebase/app";
 import { 
   getFirestore, 
@@ -22,8 +21,8 @@ import { fileURLToPath } from 'url';
 
 const app = express();
 // Fallback for __dirname and __filename in ESM
-const _filename = typeof __filename !== 'undefined' ? __filename : fileURLToPath(import.meta.url);
-const _dirname = typeof __dirname !== 'undefined' ? __dirname : path.dirname(_filename);
+const _filename = typeof __filename !== 'undefined' ? __filename : (typeof import.meta !== 'undefined' ? fileURLToPath(import.meta.url) : '');
+const _dirname = typeof __dirname !== 'undefined' ? __dirname : (path.dirname(_filename) || process.cwd());
 
 let firebaseApp: any;
 let dbInstance: any;
@@ -31,54 +30,61 @@ let dbInstance: any;
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// 1. Dynamic Vite Import for Dev only
-let viteMiddleware: any;
+// Hardcoded Fallback Config (from your firebase-applet-config.json)
+const FALLBACK_CONFIG = {
+  projectId: "extrusion-f736a",
+  appId: "1:1055215837141:web:cf25cc0674aae1b15be75c",
+  apiKey: "AIzaSyCeO4Xpdd1OhLItAL0HtHVoXTi6r20H2nA",
+  authDomain: "extrusion-f736a.firebaseapp.com",
+  firestoreDatabaseId: "(default)",
+  storageBucket: "extrusion-f736a.firebasestorage.app",
+  messagingSenderId: "1055215837141",
+  measurementId: ""
+};
 
 const initializeFirebase = () => {
   if (dbInstance) return dbInstance;
   try {
-    // 1. Try Environment Variable first (Recommended for Vercel/Production)
-    if (process.env.FIREBASE_CONFIG_JSON) {
-       console.log("[Firebase] Initializing from FIREBASE_CONFIG_JSON environment variable");
-       const config = JSON.parse(process.env.FIREBASE_CONFIG_JSON);
-       if (!config.apiKey || !config.projectId) {
-         console.error("[Firebase] Invalid config in FIREBASE_CONFIG_JSON");
-         return null;
-       }
-       firebaseApp = initializeApp(config);
-       const dbId = config.firestoreDatabaseId === "(default)" ? undefined : config.firestoreDatabaseId;
-       dbInstance = getFirestore(firebaseApp, dbId);
-       return dbInstance;
-    }
+    let config: any = null;
 
-    // 2. Try Local File Paths (Works in AI Studio)
-    const possiblePaths = [
-      path.join(process.cwd(), "firebase-applet-config.json"),
-      path.join(_dirname, "firebase-applet-config.json"),
-      path.join(_dirname, "..", "firebase-applet-config.json")
-    ];
-    
-    let configPath = "";
-    for (const p of possiblePaths) {
-      if (fs.existsSync(p)) {
-        configPath = p;
-        break;
+    // 1. Try Environment Variable first
+    if (process.env.FIREBASE_CONFIG_JSON) {
+       console.log("[Firebase] Initializing from FIREBASE_CONFIG_JSON env var");
+       config = JSON.parse(process.env.FIREBASE_CONFIG_JSON);
+    } 
+    // 2. Try Local File Paths
+    else {
+      const possiblePaths = [
+        path.join(process.cwd(), "firebase-applet-config.json"),
+        path.join(_dirname, "firebase-applet-config.json"),
+        path.join(_dirname, "..", "firebase-applet-config.json"),
+        "/var/task/firebase-applet-config.json"
+      ];
+      
+      for (const p of possiblePaths) {
+        if (fs.existsSync(p)) {
+          console.log("[Firebase] Loading config from:", p);
+          config = JSON.parse(fs.readFileSync(p, "utf-8"));
+          break;
+        }
       }
     }
 
-    if (configPath) {
-      console.log("[Firebase] Initializing from file:", configPath);
-      const config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+    // 3. Last Resort: Use hardcoded fallback
+    if (!config) {
+      console.warn("[Firebase] Config not found in ENV or FILES. Using built-in fallback.");
+      config = FALLBACK_CONFIG;
+    }
+
+    if (config && config.apiKey) {
       firebaseApp = initializeApp(config);
       const dbId = config.firestoreDatabaseId === "(default)" ? undefined : config.firestoreDatabaseId;
       dbInstance = getFirestore(firebaseApp, dbId);
+      console.log("[Firebase] Initialized Successfully for project:", config.projectId);
       return dbInstance;
-    } else {
-      console.error("[Firebase] CRITICAL ERROR: Database config not found in files or environment variables!");
-      console.warn("If you see this on Vercel, copy contents of firebase-applet-config.json to FIREBASE_CONFIG_JSON env var.");
     }
   } catch (error: any) {
-    console.error("[Firebase] Initialization failed with error:", error.message);
+    console.error("[Firebase] Initialization failed:", error.message);
   }
   return null;
 };
