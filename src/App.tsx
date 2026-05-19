@@ -155,131 +155,35 @@ export default function App() {
   const [modalConfig, setModalConfig] = useState<{ isOpen: boolean, type: string, title: string } | null>(null);
   const [newMasterItem, setNewMasterItem] = useState("");
   
-  // Auth & Sheets State
   const [user, setUser] = useState<User | null>(null);
-  const [googleToken, setGoogleToken] = useState<string | null>(sessionStorage.getItem('google_access_token'));
-  const [spreadsheetId, setSpreadsheetId] = useState<string | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (u) => {
       setUser(u);
     });
-    // fetchSheetConfig disabled
     return () => unsubscribe();
   }, []);
 
-  const fetchSheetConfig = async () => {
-    // Disabled as requested
-  };
-
   const handleGoogleSignIn = async () => {
     try {
-      const result = await signInWithPopup(auth, provider);
-      const credential = GoogleAuthProvider.credentialFromResult(result);
-      const token = credential?.accessToken || null;
-      setGoogleToken(token);
-      if (token) {
-        sessionStorage.setItem('google_access_token', token);
-      }
-      showToast("Signed in with Google successfully", 'success');
+      await signInWithPopup(auth, provider);
+      showToast("Signed in successfully", 'success');
     } catch (error) {
-      console.error("Google Sign In Error:", error);
-      showToast("Failed to sign in with Google", 'error');
+      console.error("Sign In Error:", error);
+      showToast("Failed to sign in", 'error');
     }
   };
 
   const handleSignOut = async () => {
     try {
       await auth.signOut();
-      setGoogleToken(null);
-      sessionStorage.removeItem('google_access_token');
       showToast("Signed out successfully", 'success');
     } catch (error) {
       showToast("Failed to sign out", 'error');
     }
   };
 
-  const handleInitSheet = async () => {
-    if (!googleToken) {
-      showToast("Please sign in with Google first", 'error');
-      return;
-    }
-    setIsLoading(true);
-    try {
-      const res = await fetch('/api/sheets/init', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ accessToken: googleToken })
-      });
-      const data = await res.json();
-      if (data.spreadsheetId) {
-        setSpreadsheetId(data.spreadsheetId);
-        showToast("Google Sheet connected successfully!", 'success');
-        // Initial sync of master data
-        fetch('/api/sheets/sync-master', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ accessToken: googleToken })
-        }).catch(e => console.error("Initial master sync failed", e));
-      }
-    } catch (err) {
-      showToast("Failed to connect sheet", 'error');
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const handleFullSync = async () => {
-    if (!googleToken || !spreadsheetId) {
-      showToast("Connect to Google Sheets first", 'error');
-      return;
-    }
-    setIsSyncing(true);
-    try {
-      const res = await fetch('/api/sheets/sync-all', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ accessToken: googleToken })
-      });
-      const data = await res.json();
-      if (res.ok) {
-        showToast("Full database sync completed", 'success');
-      } else {
-        showToast(data.error || "Sync failed", 'error');
-      }
-    } catch (err) {
-      showToast("Network error during sync", 'error');
-    } finally {
-      setIsSyncing(false);
-    }
-  };
-
-  const handleSyncMasterData = async () => {
-    if (!googleToken || !spreadsheetId) {
-      showToast("Connect to Google Sheets first", 'error');
-      return;
-    }
-    setIsSyncing(true);
-    try {
-      const res = await fetch('/api/sheets/sync-master', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ accessToken: googleToken })
-      });
-      const data = await res.json();
-      if (res.ok) {
-        showToast("Master tables synced to Cloud successfully!", 'success');
-      } else {
-        showToast(data.error || "Master Sync Failed", 'error');
-      }
-    } catch (err) {
-      showToast("Network failure", 'error');
-    } finally {
-      setIsSyncing(false);
-    }
-  };
-  
   const [machineFormData, setMachineFormData] = useState({
     id: '',
     type: '',
@@ -299,8 +203,7 @@ export default function App() {
           fetchProductionRecords(),
           fetchNextRollId(),
           fetchPreviousRollId(),
-          fetchMasterStore(),
-          fetchSheetConfig()
+          fetchMasterStore()
         ]);
       } catch (err: any) {
         setFetchError("ডিপেনডেন্সি লোড করতে সমস্যা হয়েছে। ডাটাবেস এরর হতে পারে।");
@@ -505,9 +408,6 @@ export default function App() {
     setIsLoading(true);
     try {
       const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-      if (googleToken) {
-        headers['x-google-access-token'] = googleToken;
-      }
 
       const res = await fetch('/api/production', {
         method: 'POST',
@@ -516,13 +416,7 @@ export default function App() {
       });
       const data = await res.json();
       if (res.ok) {
-        if (data.syncStatus === 'success') {
-          showToast("Entry saved & synced to Google Sheets!", 'success');
-        } else if (data.syncStatus === 'error') {
-          showToast("Entry saved locally, but Cloud sync failed.", 'error');
-        } else {
-          showToast("Production Entry Saved Successfully", 'success');
-        }
+        showToast("Production Entry Saved Successfully", 'success');
         
         fetchDashboard();
         fetchRecentEntries();
@@ -864,22 +758,6 @@ export default function App() {
                       {/* Form Header (As per Sch 1) */}
                       <div className="flex flex-col md:flex-row md:items-center justify-between border-b border-slate-100 pb-6 mb-4 gap-6">
                         <div className="flex-1">
-                          {spreadsheetId && (
-                            <div className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full border transition-all ${googleToken ? 'bg-emerald-50 border-emerald-100' : 'bg-amber-50 border-amber-100 animate-pulse'}`}>
-                              <div className={`w-1.5 h-1.5 rounded-full ${googleToken ? 'bg-emerald-500' : 'bg-amber-500'}`} />
-                              <span className={`text-[9px] font-black uppercase tracking-widest ${googleToken ? 'text-emerald-600' : 'text-amber-600'}`}>
-                                {googleToken ? 'Cloud Sync Active' : 'Cloud Sync Idle - Reconecting...'}
-                              </span>
-                              {!googleToken && (
-                                <button 
-                                  onClick={handleGoogleSignIn}
-                                  className="ml-2 text-[8px] font-black text-amber-700 underline uppercase tracking-tighter"
-                                >
-                                  Reconnect
-                                </button>
-                              )}
-                            </div>
-                          )}
                         </div>
 
                         {/* Moved Inputs: Production Date and Shift */}
@@ -1082,16 +960,6 @@ export default function App() {
                       </div>
                       <h3 className="text-lg font-display font-bold text-slate-900 uppercase tracking-tight">Reference Tables</h3>
                     </div>
-                    {spreadsheetId && (
-                       <button 
-                        onClick={handleSyncMasterData}
-                        disabled={isSyncing || !googleToken}
-                        className="px-6 py-2.5 bg-emerald-600 text-white rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-100 flex items-center gap-2 disabled:opacity-50"
-                      >
-                        {isSyncing ? <RefreshCw size={14} className="animate-spin" /> : <Database size={14} />}
-                        Sync All Master to Google Sheets
-                      </button>
-                    )}
                   </div>
                   
                   <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-8">
@@ -1594,129 +1462,9 @@ export default function App() {
                 </div>
 
                 {/* Google Sheets Sync Card */}
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                  <div className="lg:col-span-1 glass-panel p-6 border-indigo-100 bg-indigo-50/30">
-                    <div className="flex items-start justify-between mb-4">
-                      <div className="w-12 h-12 rounded-2xl bg-white flex items-center justify-center text-indigo-500 shadow-sm border border-indigo-100">
-                        <FileSpreadsheet size={24} />
-                      </div>
-                      <div className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-tighter ${spreadsheetId ? 'bg-emerald-100 text-emerald-600' : 'bg-amber-100 text-amber-600'}`}>
-                        {spreadsheetId ? 'Linked' : 'Not Linked'}
-                      </div>
-                    </div>
-                    <h4 className="text-sm font-black text-slate-900 uppercase tracking-tight mb-1">Google Sheets Database</h4>
-                    <p className="text-[11px] text-slate-500 font-medium leading-relaxed mb-6">
-                      Sync every production cycle automatically to a private Google Spreadsheet for advanced analysis and reporting.
-                    </p>
-                    
-                    {!spreadsheetId ? (
-                      <div className="space-y-3">
-                        {user && !googleToken && (
-                           <button 
-                            onClick={handleGoogleSignIn}
-                            className="w-full py-3 bg-amber-500 text-white rounded-xl text-[10px] font-black uppercase tracking-[0.2em] shadow-lg shadow-amber-200 hover:bg-amber-600 transition-all"
-                          >
-                            Grant API Permissions
-                          </button>
-                        )}
-                        <button 
-                          onClick={handleInitSheet}
-                          disabled={isLoading || !user || !googleToken}
-                          className="w-full py-3 bg-indigo-600 text-white rounded-xl text-[10px] font-black uppercase tracking-[0.2em] shadow-lg shadow-indigo-200 hover:bg-indigo-700 transition-all disabled:opacity-50"
-                        >
-                          {isLoading ? 'Connecting...' : (googleToken ? 'Initialize / Link Sheet' : 'Sign in to Link')}
-                        </button>
-                      </div>
-                    ) : (
-                      <div className="space-y-3">
-                        {googleToken ? (
-                          <div className="space-y-3">
-                            <button 
-                              onClick={handleFullSync}
-                              disabled={isSyncing}
-                              className="w-full py-3 bg-white border border-indigo-200 text-indigo-600 rounded-xl text-[10px] font-black uppercase tracking-[0.2em] hover:bg-indigo-50 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
-                            >
-                              {isSyncing ? <RefreshCw size={14} className="animate-spin" /> : <RefreshCw size={14} />}
-                              Push full Database
-                            </button>
-                            <button 
-                              onClick={handleSyncMasterData}
-                              disabled={isSyncing}
-                              className="w-full py-3 bg-emerald-600 text-white rounded-xl text-[10px] font-black uppercase tracking-[0.2em] hover:bg-emerald-700 transition-all flex items-center justify-center gap-2 shadow-lg shadow-emerald-100 disabled:opacity-50"
-                            >
-                              <Database size={14} />
-                              Sync All Master Tables
-                            </button>
-                          </div>
-                        ) : (
-                          <button 
-                            onClick={handleGoogleSignIn}
-                            className="w-full py-3 bg-amber-500 text-white rounded-xl text-[10px] font-black uppercase tracking-[0.2em] shadow-lg shadow-amber-200 hover:bg-amber-600 transition-all flex items-center justify-center gap-2"
-                          >
-                            Reconnect for Sync
-                          </button>
-                        )}
-                        <a 
-                          href={`https://docs.google.com/spreadsheets/d/${spreadsheetId}`} 
-                          target="_blank" 
-                          rel="noreferrer"
-                          className="w-full py-3 bg-slate-900 text-white rounded-xl text-[10px] font-black uppercase tracking-[0.2em] hover:bg-slate-800 transition-all flex items-center justify-center gap-2"
-                        >
-                          Open Spreadsheet
-                        </a>
-                      </div>
-                    )}
-                    {!user && (
-                      <p className="text-[9px] text-center mt-3 text-rose-500 font-black uppercase tracking-widest italic animate-pulse">
-                        Sign in required for sync
-                      </p>
-                    )}
-                  </div>
-
-                  <div className="lg:col-span-2 glass-panel p-6 border-slate-200">
-                    <div className="flex items-center gap-3 mb-6">
-                      <div className="w-10 h-10 rounded-xl bg-slate-100 flex items-center justify-center text-slate-500">
-                        <Activity size={20} />
-                      </div>
-                      <div>
-                        <h4 className="text-sm font-black text-slate-900 uppercase tracking-tight">Sync Activity</h4>
-                        <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Real-time update stream</p>
-                      </div>
-                    </div>
-                    
-                    <div className="space-y-4">
-                      {productionRecords.length > 0 ? productionRecords.slice(0, 4).map((record, i) => (
-                        <div key={i} className="flex items-center justify-between p-3 rounded-xl bg-slate-50 border border-slate-100">
-                          <div className="flex items-center gap-4">
-                            <div className="w-8 h-8 rounded-lg bg-white border border-slate-200 flex items-center justify-center font-mono text-[10px] font-black text-slate-400">
-                              {i+1}
-                            </div>
-                            <div>
-                              <p className="text-[11px] font-black text-slate-800">{record.RollID}</p>
-                              <p className="text-[9px] font-bold text-slate-400 uppercase tracking-tighter">{record.DataUpdateTime}</p>
-                            </div>
-                          </div>
-                          <div className="flex items-center gap-2">
-                             {/* Since we don't store sync state per record in masterData yet, 
-                                 we show "Available" if linked, but we acknowledge the link status */}
-                            <div className={`w-2 h-2 rounded-full ${spreadsheetId ? 'bg-emerald-400' : 'bg-slate-300'}`} />
-                            <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest">
-                              {spreadsheetId ? 'Live Sync' : 'Offline'}
-                            </span>
-                          </div>
-                        </div>
-                      )) : (
-                        <div className="py-8 text-center border-2 border-dashed border-slate-100 rounded-2xl">
-                          <p className="text-[10px] font-black text-slate-300 uppercase tracking-widest">No recent activity</p>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-
                 <div className="glass-panel overflow-hidden border-slate-200">
                   <div className="overflow-x-auto">
-                    <table className="w-full text-left border-collapse min-w-[3000px]">
+                    <table className="w-full text-left border-collapse min-w-[2000px]">
                       <thead>
                         <tr className="bg-slate-50 border-b border-slate-100">
                           <th className="px-4 py-4 text-[9px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Roll ID</th>

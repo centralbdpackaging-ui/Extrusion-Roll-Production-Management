@@ -34,11 +34,20 @@ app.use(express.urlencoded({ extended: true }));
 const initializeFirebase = () => {
   if (dbInstance) return dbInstance;
   try {
+    // 1. Try Environment Variable first (Best for Vercel)
+    if (process.env.FIREBASE_CONFIG_JSON) {
+       console.log("[Firebase] Initializing from Environment Variable...");
+       const config = JSON.parse(process.env.FIREBASE_CONFIG_JSON);
+       firebaseApp = initializeApp(config);
+       dbInstance = getFirestore(firebaseApp);
+       return dbInstance;
+    }
+
+    // 2. Try Local File Paths
     const possiblePaths = [
       path.join(process.cwd(), "firebase-applet-config.json"),
       path.join(_dirname, "firebase-applet-config.json"),
-      path.join(_dirname, "..", "firebase-applet-config.json"),
-      "/var/task/firebase-applet-config.json"
+      path.join(_dirname, "..", "firebase-applet-config.json")
     ];
     
     let configPath = "";
@@ -50,21 +59,14 @@ const initializeFirebase = () => {
     }
 
     if (configPath) {
-      console.log("[Firebase] Loading config from:", configPath);
+      console.log("[Firebase] Initializing from file:", configPath);
       const config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
       firebaseApp = initializeApp(config);
       const dbId = config.firestoreDatabaseId === "(default)" ? undefined : config.firestoreDatabaseId;
       dbInstance = getFirestore(firebaseApp, dbId);
       return dbInstance;
     } else {
-      // Fallback to environment variables if file is missing in serverless
-      if (process.env.FIREBASE_CONFIG_JSON) {
-         const config = JSON.parse(process.env.FIREBASE_CONFIG_JSON);
-         firebaseApp = initializeApp(config);
-         dbInstance = getFirestore(firebaseApp);
-         return dbInstance;
-      }
-      console.error("[Firebase] Config missing. Expected at:", possiblePaths);
+      console.error("[Firebase] CRITICAL: No config found. Set FIREBASE_CONFIG_JSON env var or provide config file.");
     }
   } catch (error) {
     console.error("[Firebase] Initialization failed:", error);
@@ -89,7 +91,7 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
 
 export { app };
 
-const PORT = process.env.PORT || 3000;
+const PORT = Number(process.env.PORT) || 3000;
 
 app.get("/api/debug/firebase", async (req, res) => {
   const db = initializeFirebase();
