@@ -34,16 +34,17 @@ app.use(express.urlencoded({ extended: true }));
 const initializeFirebase = () => {
   if (dbInstance) return dbInstance;
   try {
-    // 1. Try Environment Variable first (Best for Vercel)
+    // 1. Try Environment Variable first (Recommended for Vercel/Production)
     if (process.env.FIREBASE_CONFIG_JSON) {
-       console.log("[Firebase] Initializing from Environment Variable...");
+       console.log("[Firebase] Initializing from FIREBASE_CONFIG_JSON environment variable");
        const config = JSON.parse(process.env.FIREBASE_CONFIG_JSON);
        firebaseApp = initializeApp(config);
-       dbInstance = getFirestore(firebaseApp);
+       const dbId = config.firestoreDatabaseId === "(default)" ? undefined : config.firestoreDatabaseId;
+       dbInstance = getFirestore(firebaseApp, dbId);
        return dbInstance;
     }
 
-    // 2. Try Local File Paths
+    // 2. Try Local File Paths (Works in AI Studio)
     const possiblePaths = [
       path.join(process.cwd(), "firebase-applet-config.json"),
       path.join(_dirname, "firebase-applet-config.json"),
@@ -66,10 +67,12 @@ const initializeFirebase = () => {
       dbInstance = getFirestore(firebaseApp, dbId);
       return dbInstance;
     } else {
-      console.error("[Firebase] CRITICAL: No config found. Set FIREBASE_CONFIG_JSON env var or provide config file.");
+      console.error("[Firebase] CRITICAL ERROR: Database config not found!");
+      console.error("Checked paths:", possiblePaths);
+      console.error("Action Required: Add FIREBASE_CONFIG_JSON to your environment variables.");
     }
-  } catch (error) {
-    console.error("[Firebase] Initialization failed:", error);
+  } catch (error: any) {
+    console.error("[Firebase] Initialization failed with error:", error.message);
   }
   return null;
 };
