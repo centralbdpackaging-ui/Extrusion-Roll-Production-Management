@@ -265,15 +265,22 @@ const safeHandler = (fn: (req: any, res: any) => Promise<void>) => async (req: a
   try {
     const db = initializeFirebase();
     if (!db && !req.path.includes('/health') && !req.path.includes('/debug')) {
+      console.error("[Database Error] DB not initialized for path:", req.path);
       return res.status(503).json({ 
         error: "Database Connection Failed", 
-        message: "Firebase is not initialized. If you are on Vercel, you MUST add 'FIREBASE_CONFIG_JSON' environment variable. Check your server logs for more details." 
+        message: "Firebase is NOT initialized on the server.",
+        info: "If you are on Vercel, you MUST add 'FIREBASE_CONFIG_JSON' in Environment Variables.",
+        debug_check: "Check /api/health for more details."
       });
     }
     await fn(req, res);
   } catch (err: any) {
     console.error(`[Route Error] ${req.method} ${req.path}:`, err);
-    res.status(500).json({ error: err.message || "Internal Server Error" });
+    res.status(500).json({ 
+      error: "Internal Server Error", 
+      details: err.message,
+      path: req.path
+    });
   }
 };
 
