@@ -78,7 +78,13 @@ initializeFirebase();
 // Global Error Handler
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
   console.error("[Global Error]", err);
-  res.status(500).json({ error: "Internal Server Error", message: err.message });
+  if (!res.headersSent) {
+    res.status(500).json({ 
+      error: "Internal Server Error", 
+      message: err.message,
+      stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
+    });
+  }
 });
 
 export { app };
@@ -136,7 +142,7 @@ app.get("/api/debug/firebase", async (req, res) => {
       const masterDoc = await getDoc(doc(db, 'master_store', 'dropdowns'));
       if (!masterDoc.exists()) {
         console.log("[Seeding] Populating master_store...");
-        await setDoc(doc(dbInstance, 'master_store', 'dropdowns'), {
+        await setDoc(doc(db, 'master_store', 'dropdowns'), {
           shifts: ['A', 'B', 'C'],
           productionTypes: ['Commercial', 'R&D', 'Trial', 'Sample'],
           uoms: ['Kgs', 'Rolls', 'Meter', 'INCH'],
@@ -146,7 +152,7 @@ app.get("/api/debug/firebase", async (req, res) => {
         });
       }
 
-      const machineSnapshot = await getDocs(query(collection(dbInstance, 'machines'), limit(1)));
+      const machineSnapshot = await getDocs(query(collection(db, 'machines'), limit(1)));
       if (machineSnapshot.empty) {
         console.log("[Seeding] Populating machines collection...");
         const initialMachines = [
@@ -170,14 +176,14 @@ app.get("/api/debug/firebase", async (req, res) => {
           { id: "Ext-19-LD801", type: "LD801", target: 5000, status: "Running", reason: "" },
           { id: "Zipper-01", type: "Zipper", target: 3000, status: "Running", reason: "" },
         ];
-        const batch = writeBatch(dbInstance);
+        const batch = writeBatch(db);
         for (const m of initialMachines) {
-          batch.set(doc(dbInstance, 'machines', m.id), m);
+          batch.set(doc(db, 'machines', m.id), m);
         }
         await batch.commit();
       }
 
-      const operatorSnapshot = await getDocs(query(collection(dbInstance, 'operators'), limit(1)));
+      const operatorSnapshot = await getDocs(query(collection(db, 'operators'), limit(1)));
       if (operatorSnapshot.empty) {
         console.log("[Seeding] Populating operators collection...");
         const initialOperators = [
@@ -185,9 +191,9 @@ app.get("/api/debug/firebase", async (req, res) => {
           { id: "14", name: "Md. Layes Ali", email: "mdlayeshossain5@gmail.com" },
           { id: "110", name: "Md. Rabiul Islam", email: "mdrobilislam19@gmail.com" },
         ];
-        const batch = writeBatch(dbInstance);
+        const batch = writeBatch(db);
         for (const o of initialOperators) {
-          batch.set(doc(dbInstance, 'operators', o.id), o);
+          batch.set(doc(db, 'operators', o.id), o);
         }
         await batch.commit();
       }
@@ -235,19 +241,6 @@ app.get("/api/debug/firebase", async (req, res) => {
     const db = initializeFirebase();
     const s = await getDocs(query(collection(db, 'production_records'), orderBy('EntryTimestamp', 'asc')));
     return s.docs.map(d => d.data());
-  };
-
-  // Google Sheets Helper
-  const getSheetsClient = (accessToken: string) => {
-    const auth = new google.auth.OAuth2();
-    auth.setCredentials({ access_token: accessToken });
-    return google.sheets({ version: "v4", auth });
-  };
-
-  const getDriveClient = (accessToken: string) => {
-    const auth = new google.auth.OAuth2();
-    auth.setCredentials({ access_token: accessToken });
-    return google.drive({ version: "v3", auth });
   };
 
   const PRODUCTION_COLUMNS = [
