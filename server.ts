@@ -31,6 +31,9 @@ let dbInstance: any;
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// 1. Dynamic Vite Import for Dev only
+let viteMiddleware: any;
+
 const initializeFirebase = () => {
   if (dbInstance) return dbInstance;
   try {
@@ -38,6 +41,10 @@ const initializeFirebase = () => {
     if (process.env.FIREBASE_CONFIG_JSON) {
        console.log("[Firebase] Initializing from FIREBASE_CONFIG_JSON environment variable");
        const config = JSON.parse(process.env.FIREBASE_CONFIG_JSON);
+       if (!config.apiKey || !config.projectId) {
+         console.error("[Firebase] Invalid config in FIREBASE_CONFIG_JSON");
+         return null;
+       }
        firebaseApp = initializeApp(config);
        const dbId = config.firestoreDatabaseId === "(default)" ? undefined : config.firestoreDatabaseId;
        dbInstance = getFirestore(firebaseApp, dbId);
@@ -68,18 +75,13 @@ const initializeFirebase = () => {
       return dbInstance;
     } else {
       console.error("[Firebase] CRITICAL ERROR: Database config not found in files or environment variables!");
-      console.error("To fix this, go to your Vercel Project Settings > Environment Variables and add a new secret:");
-      console.error("Key: FIREBASE_CONFIG_JSON");
-      console.error("Value: (Copy the contents of your firebase-applet-config.json file)");
+      console.warn("If you see this on Vercel, copy contents of firebase-applet-config.json to FIREBASE_CONFIG_JSON env var.");
     }
   } catch (error: any) {
     console.error("[Firebase] Initialization failed with error:", error.message);
   }
   return null;
 };
-
-// Initialize early
-initializeFirebase();
 
 // Global Error Handler
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
@@ -88,7 +90,8 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
     res.status(500).json({ 
       error: "Internal Server Error", 
       message: err.message,
-      stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
+      path: req.path,
+      vercel: !!process.env.VERCEL
     });
   }
 });
@@ -96,6 +99,24 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
 export { app };
 
 const PORT = Number(process.env.PORT) || 3000;
+
+app.get("/api/diag", (req, res) => {
+  const possiblePaths = [
+    path.join(process.cwd(), "firebase-applet-config.json"),
+    path.join(_dirname, "firebase-applet-config.json"),
+    path.join(_dirname, "..", "firebase-applet-config.json")
+  ];
+  
+  res.json({
+    status: "online",
+    vercel: !!process.env.VERCEL,
+    env_keys: Object.keys(process.env),
+    firebase_env_present: !!process.env.FIREBASE_CONFIG_JSON,
+    cwd: process.cwd(),
+    dirname: _dirname,
+    files_checked: possiblePaths.map(p => ({ path: p, exists: fs.existsSync(p) }))
+  });
+});
 
 app.get("/api/debug/firebase", async (req, res) => {
   const db = initializeFirebase();
@@ -214,12 +235,21 @@ app.get("/api/debug/firebase", async (req, res) => {
 
   const getRollSettings = async () => {
     const db = initializeFirebase();
+    if (!db) return { LAST_ROLL_NO: 17413, PREFIX: "R", CURRENT_YEAR: "26" };
     const d = await getDoc(doc(db, 'app_config', 'roll_settings'));
     return d.data() || { LAST_ROLL_NO: 17413, PREFIX: "R", CURRENT_YEAR: "26" };
   };
 
   const getMasterStore = async () => {
     const db = initializeFirebase();
+    if (!db) return {
+      shifts: ['A', 'B', 'C'],
+      productionTypes: ['Commercial', 'R&D', 'Trial', 'Sample'],
+      uoms: ['Kgs', 'Rolls', 'Meter', 'INCH'],
+      materials: ['LDPE', 'HDPE', 'LLDPE', 'PP', 'BOPP'],
+      inlinePrintOptions: ['Yes', 'No'],
+      years: ['2023', '2024', '2025', '2026', '2027']
+    };
     const d = await getDoc(doc(db, 'master_store', 'dropdowns'));
     return d.data() || {
       shifts: ['A', 'B', 'C'],
@@ -233,18 +263,21 @@ app.get("/api/debug/firebase", async (req, res) => {
 
   const getMachines = async () => {
     const db = initializeFirebase();
+    if (!db) return [];
     const s = await getDocs(collection(db, 'machines'));
     return s.docs.map(d => d.data());
   };
 
   const getOperators = async () => {
     const db = initializeFirebase();
+    if (!db) return [];
     const s = await getDocs(collection(db, 'operators'));
     return s.docs.map(d => d.data());
   };
 
   const syncProductionRecords = async () => {
     const db = initializeFirebase();
+    if (!db) return [];
     const s = await getDocs(query(collection(db, 'production_records'), orderBy('EntryTimestamp', 'asc')));
     return s.docs.map(d => d.data());
   };
@@ -483,20 +516,28 @@ const safeHandler = (fn: (req: any, res: any) => Promise<void>) => async (req: a
 (async () => {
   // Vite middleware for development - skip in Vercel environment where static is handled differently
   if (process.env.NODE_ENV !== "production" && !process.env.VERCEL) {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa",
-    });
-    app.use(vite.middlewares);
+    try {
+      const { createServer: createViteServer } = await import("vite");
+      const vite = await createViteServer({
+        server: { middlewareMode: true },
+        appType: "spa",
+      });
+      app.use(vite.middlewares);
+    } catch (err) {
+      console.error("Vite failed to load", err);
+    }
   } else if (!process.env.VERCEL) {
     const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
-    app.get('*', (req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
-    });
+    if (fs.existsSync(distPath)) {
+      app.use(express.static(distPath));
+      app.get('*', (req, res) => {
+        res.sendFile(path.join(distPath, 'index.html'));
+      });
+    }
   }
 
-  if (!process.env.VERCEL) {
+  // Only listen if NOT in a serverless environment like Vercel
+  if (!process.env.VERCEL && !process.env.AWS_LAMBDA_FUNCTION_NAME) {
     app.listen(PORT, "0.0.0.0", () => {
       console.log(`Server running on http://localhost:${PORT}`);
     });
