@@ -1,8 +1,13 @@
 import express from "express";
 import path from "path";
 import fs from "fs";
-import { initializeApp } from "firebase/app";
-import { 
+import * as firebaseAppModule from "firebase/app";
+import * as firestoreModule from "firebase/firestore";
+
+import { fileURLToPath } from 'node:url';
+
+const { initializeApp, getApp, getApps } = firebaseAppModule;
+const { 
   getFirestore, 
   collection, 
   doc, 
@@ -15,9 +20,7 @@ import {
   orderBy, 
   limit, 
   writeBatch 
-} from "firebase/firestore";
-
-import { fileURLToPath } from 'url';
+} = firestoreModule;
 
 const app = express();
 // Fallback for __dirname and __filename in ESM
@@ -49,42 +52,41 @@ const initializeFirebase = () => {
 
     // 1. Try Environment Variable first
     if (process.env.FIREBASE_CONFIG_JSON) {
-       console.log("[Firebase] Initializing from FIREBASE_CONFIG_JSON env var");
+       console.log("[Firebase] Loading from ENV");
        config = JSON.parse(process.env.FIREBASE_CONFIG_JSON);
     } 
     // 2. Try Local File Paths
     else {
-      const possiblePaths = [
+      const paths = [
         path.join(process.cwd(), "firebase-applet-config.json"),
         path.join(_dirname, "firebase-applet-config.json"),
-        path.join(_dirname, "..", "firebase-applet-config.json"),
-        "/var/task/firebase-applet-config.json"
+        path.join(_dirname, "..", "firebase-applet-config.json")
       ];
       
-      for (const p of possiblePaths) {
+      for (const p of paths) {
         if (fs.existsSync(p)) {
-          console.log("[Firebase] Loading config from:", p);
           config = JSON.parse(fs.readFileSync(p, "utf-8"));
           break;
         }
       }
     }
 
-    // 3. Last Resort: Use hardcoded fallback
-    if (!config) {
-      console.warn("[Firebase] Config not found in ENV or FILES. Using built-in fallback.");
+    // 3. Fallback
+    if (!config || !config.apiKey) {
+      console.warn("[Firebase] Using Fallback Config");
       config = FALLBACK_CONFIG;
     }
 
-    if (config && config.apiKey) {
-      firebaseApp = initializeApp(config);
-      const dbId = config.firestoreDatabaseId === "(default)" ? undefined : config.firestoreDatabaseId;
-      dbInstance = getFirestore(firebaseApp, dbId);
-      console.log("[Firebase] Initialized Successfully for project:", config.projectId);
-      return dbInstance;
-    }
+    const appName = "[DEFAULT]";
+    const existingApp = getApps().find(a => a.name === appName);
+    firebaseApp = existingApp || initializeApp(config, appName);
+    
+    const dbId = config.firestoreDatabaseId === "(default)" ? undefined : config.firestoreDatabaseId;
+    dbInstance = getFirestore(firebaseApp, dbId);
+    console.log("[Firebase] Connected:", config.projectId);
+    return dbInstance;
   } catch (error: any) {
-    console.error("[Firebase] Initialization failed:", error.message);
+    console.error("[Firebase] Init Error:", error.message);
   }
   return null;
 };
