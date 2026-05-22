@@ -768,6 +768,7 @@ export default function App() {
                       {/* Form Header (As per Sch 1) */}
                       <div className="flex flex-col md:flex-row md:items-center justify-between border-b border-slate-100 pb-6 mb-4 gap-6">
                         <div className="flex-1">
+                          <BangladeshLiveWatch />
                         </div>
 
                         {/* Moved Inputs: Production Date and Shift */}
@@ -785,15 +786,19 @@ export default function App() {
                                     e.preventDefault();
                                     const form = e.currentTarget.closest('form');
                                     if (form) {
-                                      const focusable = Array.from(form.querySelectorAll('input:not([type="hidden"]), select')) as HTMLElement[];
+                                      const focusable = getFocusableElements(form);
                                       const index = focusable.indexOf(e.currentTarget);
                                       if (index > -1 && index < focusable.length - 1) {
-                                        focusable[index + 1].focus();
+                                        const nextElement = focusable[index + 1];
+                                        nextElement.focus();
+                                        if (nextElement instanceof HTMLInputElement && nextElement.type !== 'date') {
+                                          nextElement.select();
+                                        }
                                       }
                                     }
                                   }
                                 }}
-                                className="w-full bg-white border border-slate-200 rounded-lg px-3 py-1.5 text-xs font-bold text-slate-900 focus:outline-none focus:ring-4 focus:ring-brand-primary/10 focus:border-brand-primary/50 focus:bg-blue-50/20 focus:scale-[1.01] transition-all"
+                                className="w-full bg-white border border-slate-200 rounded-lg px-3 py-1.5 text-xs font-bold text-slate-900 focus:outline-none focus:ring-4 focus:ring-brand-primary/20 focus:border-brand-primary focus:bg-brand-primary/10 focus:scale-[1.01] transition-all"
                               />
                             </div>
                           </div>
@@ -808,15 +813,19 @@ export default function App() {
                                   e.preventDefault();
                                   const form = e.currentTarget.closest('form');
                                   if (form) {
-                                    const focusable = Array.from(form.querySelectorAll('input:not([type="hidden"]), select')) as HTMLElement[];
+                                    const focusable = getFocusableElements(form);
                                     const index = focusable.indexOf(e.currentTarget);
                                     if (index > -1 && index < focusable.length - 1) {
-                                      focusable[index + 1].focus();
+                                      const nextElement = focusable[index + 1];
+                                      nextElement.focus();
+                                      if (nextElement instanceof HTMLInputElement && nextElement.type !== 'date') {
+                                        nextElement.select();
+                                      }
                                     }
                                   }
                                 }
                               }}
-                              className="w-full bg-white border border-slate-200 rounded-lg px-3 py-1.5 text-xs font-bold text-slate-900 focus:outline-none focus:ring-4 focus:ring-brand-primary/10 focus:border-brand-primary/50 focus:bg-blue-50/20 focus:scale-[1.01] transition-all appearance-none"
+                              className="w-full bg-white border border-slate-200 rounded-lg px-3 py-1.5 text-xs font-bold text-slate-900 focus:outline-none focus:ring-4 focus:ring-brand-primary/20 focus:border-brand-primary focus:bg-brand-primary/10 focus:scale-[1.01] transition-all appearance-none"
                             >
                               {masterStore.shifts.map((s: string) => <option key={s} value={s}>{s}</option>)}
                             </select>
@@ -1835,6 +1844,14 @@ function StatusLegend({ color, label }: { color: string, label: string }) {
   );
 }
 
+function getFocusableElements(form: HTMLFormElement) {
+  return Array.from(
+    form.querySelectorAll('input:not([type="hidden"]), select')
+  ).filter((el: any) => {
+    return el.offsetWidth > 0 && el.offsetHeight > 0 && !el.disabled;
+  }) as HTMLElement[];
+}
+
 function InputField({ label, name, icon, ...props }: any) {
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
@@ -1842,9 +1859,7 @@ function InputField({ label, name, icon, ...props }: any) {
       const currentInput = e.currentTarget;
       const form = currentInput.closest('form');
       if (form) {
-        const focusable = Array.from(
-          form.querySelectorAll('input:not([type="hidden"]), select')
-        ) as HTMLElement[];
+        const focusable = getFocusableElements(form);
         const index = focusable.indexOf(currentInput);
         if (index > -1 && index < focusable.length - 1) {
           const nextElement = focusable[index + 1];
@@ -1867,7 +1882,7 @@ function InputField({ label, name, icon, ...props }: any) {
         name={name}
         onKeyDown={handleKeyDown}
         {...props}
-        className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 text-xs text-slate-900 placeholder:text-slate-200 focus:outline-none focus:ring-4 focus:ring-brand-primary/10 focus:border-brand-primary/50 focus:bg-blue-50/20 focus:scale-[1.01] transition-all font-medium h-[34px]"
+        className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 text-xs text-slate-900 placeholder:text-slate-200 focus:outline-none focus:ring-4 focus:ring-brand-primary/20 focus:border-brand-primary focus:bg-brand-primary/10 focus:scale-[1.01] transition-all font-medium h-[34px]"
       />
     </div>
   );
@@ -1934,9 +1949,7 @@ function SelectField({ label, name, icon, options = [], placeholder, value, onCh
         const currentInput = e.currentTarget;
         const form = currentInput.closest('form');
         if (form) {
-          const focusable = Array.from(
-            form.querySelectorAll('input:not([type="hidden"]), select')
-          ) as HTMLElement[];
+          const focusable = getFocusableElements(form);
           const index = focusable.indexOf(currentInput);
           if (index > -1 && index < focusable.length - 1) {
             const nextElement = focusable[index + 1];
@@ -1978,9 +1991,7 @@ function SelectField({ label, name, icon, options = [], placeholder, value, onCh
             if (currentInput) {
               const form = currentInput.closest('form');
               if (form) {
-                const focusable = Array.from(
-                  form.querySelectorAll('input:not([type="hidden"]), select')
-                ) as HTMLElement[];
+                const focusable = getFocusableElements(form);
                 const index = focusable.indexOf(currentInput);
                 if (index > -1 && index < focusable.length - 1) {
                   const nextElement = focusable[index + 1];
@@ -2022,7 +2033,7 @@ function SelectField({ label, name, icon, options = [], placeholder, value, onCh
             setSearchQuery('');
           }}
           onKeyDown={handleKeyDown}
-          className="w-full bg-slate-50 border border-slate-200 rounded-lg pl-3 pr-10 py-1.5 text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-4 focus:ring-brand-primary/10 focus:border-brand-primary/50 focus:bg-blue-50/20 focus:scale-[1.01] transition-all font-medium h-[34px] cursor-text"
+          className="w-full bg-slate-50 border border-slate-200 rounded-lg pl-3 pr-10 py-1.5 text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-4 focus:ring-brand-primary/20 focus:border-brand-primary focus:bg-brand-primary/10 focus:scale-[1.01] transition-all font-medium h-[34px] cursor-text"
         />
         
         <div className="absolute right-2.5 top-1/2 -translate-y-1/2 flex items-center gap-1 text-slate-400">
@@ -2077,6 +2088,61 @@ function SelectField({ label, name, icon, options = [], placeholder, value, onCh
             </div>
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+function BangladeshLiveWatch() {
+  const [time, setTime] = useState<Date>(new Date());
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setTime(new Date());
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const timeFormatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Dhaka',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: true,
+  });
+
+  const dateFormatter = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Dhaka',
+    weekday: 'short',
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+  });
+
+  const formattedTime = timeFormatter.format(time);
+  const formattedDate = dateFormatter.format(time);
+
+  return (
+    <div className="inline-flex items-center gap-3 bg-slate-50 border border-slate-150 rounded-xl px-4 py-2 hover:border-brand-primary/20 transition-all duration-300">
+      <div className="w-8 h-8 rounded-lg bg-brand-primary/10 flex items-center justify-center text-brand-primary shrink-0 relative">
+        <Clock size={16} className="animate-pulse" />
+      </div>
+      <div className="flex flex-col">
+        <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest leading-none mb-1 flex items-center gap-1.5">
+          Bangladesh Standard Time
+          <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping"></span>
+        </span>
+        <div className="flex items-baseline gap-1.5 leading-none">
+          <span className="font-mono text-sm font-black text-slate-900 tracking-tight leading-none">
+            {formattedTime}
+          </span>
+          <span className="text-[8px] font-black text-brand-primary uppercase font-mono tracking-widest leading-none">
+            BST
+          </span>
+        </div>
+        <span className="text-[8px] font-bold text-slate-500 uppercase tracking-wider mt-1 leading-none">
+          {formattedDate}
+        </span>
       </div>
     </div>
   );
