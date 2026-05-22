@@ -14,7 +14,8 @@ import {
   query, 
   orderBy, 
   limit, 
-  writeBatch 
+  writeBatch,
+  where
 } from "firebase/firestore";
 
 import { fileURLToPath } from 'node:url';
@@ -163,13 +164,24 @@ app.get("/api/debug/firebase", async (req, res) => {
       const masterDoc = await getDoc(doc(db, 'master_store', 'dropdowns'));
       if (!masterDoc.exists()) {
         await setDoc(doc(db, 'master_store', 'dropdowns'), {
-          shifts: ['A', 'B', 'C'],
+          shifts: ['Day', 'Night', 'A', 'B', 'C'],
           productionTypes: ['Commercial', 'R&D', 'Trial', 'Sample'],
           uoms: ['Kgs', 'Rolls', 'Meter', 'INCH'],
           materials: ['LDPE', 'HDPE', 'LLDPE', 'PP', 'BOPP'],
           inlinePrintOptions: ['Yes', 'No'],
           years: ['2023', '2024', '2025', '2026', '2027']
         });
+      } else {
+        // Partially sync to add Day and Night if they are missing
+        const existingData = masterDoc.data() || {};
+        const existingShifts = existingData.shifts || [];
+        if (!existingShifts.includes('Day') || !existingShifts.includes('Night')) {
+          const updatedShifts = Array.from(new Set(['Day', 'Night', ...existingShifts]));
+          await setDoc(doc(db, 'master_store', 'dropdowns'), {
+            ...existingData,
+            shifts: updatedShifts
+          }, { merge: true });
+        }
       }
       console.log("[Seeding] Database check completed.");
     } catch (error: any) {
@@ -187,7 +199,7 @@ app.get("/api/debug/firebase", async (req, res) => {
   const getMasterStore = async () => {
     const db = initializeFirebase();
     if (!db) return {
-      shifts: ['A', 'B', 'C'],
+      shifts: ['Day', 'Night', 'A', 'B', 'C'],
       productionTypes: ['Commercial', 'R&D', 'Trial', 'Sample'],
       uoms: ['Kgs', 'Rolls', 'Meter', 'INCH'],
       materials: ['LDPE', 'HDPE', 'LLDPE', 'PP', 'BOPP'],
@@ -196,7 +208,7 @@ app.get("/api/debug/firebase", async (req, res) => {
     };
     const d = await getDoc(doc(db, 'master_store', 'dropdowns'));
     return d.data() || {
-      shifts: ['A', 'B', 'C'],
+      shifts: ['Day', 'Night', 'A', 'B', 'C'],
       productionTypes: ['Commercial', 'R&D', 'Trial', 'Sample'],
       uoms: ['Kgs', 'Rolls', 'Meter', 'INCH'],
       materials: ['LDPE', 'HDPE', 'LLDPE', 'PP', 'BOPP'],
@@ -408,6 +420,38 @@ const safeHandler = (fn: (req: any, res: any) => Promise<void>) => async (req: a
       message: "Production Entry Saved Successfully", 
       entry: newEntry 
     });
+  }));
+
+  app.post("/api/production/update", safeHandler(async (req, res) => {
+    const db = initializeFirebase();
+    const { RollID, ...updates } = req.body;
+    if (!RollID) {
+      return res.status(400).json({ message: "RollID is required for update" });
+    }
+
+    // Find the document in the database
+    const q = query(collection(db, 'production_records'), where('RollID', '==', RollID));
+    const snapshot = await getDocs(q);
+
+    if (snapshot.empty) {
+      return res.status(404).json({ message: `Production report with RollID ${RollID} not found` });
+    }
+
+    const docId = snapshot.docs[0].id;
+    const docRef = doc(db, 'production_records', docId);
+
+    // Filter updates
+    const cleanedUpdates: any = { ...updates };
+    if (updates.ProductionDate) {
+      const date = new Date(updates.ProductionDate);
+      cleanedUpdates.ProductionYear = date.getFullYear().toString();
+      cleanedUpdates.ProductionMonth = date.toLocaleString('default', { month: 'long' });
+    }
+    cleanedUpdates.DataUpdateTime = new Date().toLocaleString();
+
+    await updateDoc(docRef, cleanedUpdates);
+
+    res.json({ message: "Production entry updated successfully" });
   }));
 
   app.get("/api/dashboard", safeHandler(async (req, res) => {

@@ -31,10 +31,11 @@ import {
   CalendarDays,
   FileSpreadsheet,
   Search,
+  Edit3,
   X
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { cn, formatDate } from './lib/utils';
+import { cn, formatDate, getShiftAndDateForDhaka } from './lib/utils';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, User } from 'firebase/auth';
 import firebaseConfig from '../firebase-applet-config.json';
@@ -113,9 +114,13 @@ const trendData = [
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<'entry' | 'dashboard' | 'history' | 'machines' | 'master-config' | 'operators' | 'master-production-record'>('dashboard');
+  
+  // Calculate Bangladesh shift and operational production date
+  const initialShiftInfo = getShiftAndDateForDhaka();
+
   const [formData, setFormData] = useState<ProductionEntry>({
-    ProductionDate: formatDate(new Date()),
-    Shift: 'A',
+    ProductionDate: initialShiftInfo.productionDate,
+    Shift: initialShiftInfo.shift,
     ProductionType: '',
     OperatorID: '',
     MachineNo: '',
@@ -145,17 +150,21 @@ export default function App() {
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
   const [masterStore, setMasterStore] = useState<any>({
-    shifts: [],
-    productionTypes: [],
-    uoms: [],
-    materials: [],
-    inlinePrintOptions: [],
-    years: []
+    shifts: ['Day', 'Night', 'A', 'B', 'C'],
+    productionTypes: ['Commercial', 'R&D', 'Trial', 'Sample'],
+    uoms: ['Kgs', 'Rolls', 'Meter', 'INCH'],
+    materials: ['LDPE', 'HDPE', 'LLDPE', 'PP', 'BOPP'],
+    inlinePrintOptions: ['Yes', 'No'],
+    years: ['2023', '2024', '2025', '2026', '2027']
   });
 
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [modalConfig, setModalConfig] = useState<{ isOpen: boolean, type: string, title: string } | null>(null);
   const [newMasterItem, setNewMasterItem] = useState("");
+  const [editingEntry, setEditingEntry] = useState<any | null>(null);
+  const [isSavingEdit, setIsSavingEdit] = useState(false);
+  const [recordSearchQuery, setRecordSearchQuery] = useState("");
+  const [feedSearchQuery, setFeedSearchQuery] = useState("");
   
   const [user, setUser] = useState<User | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
@@ -256,9 +265,9 @@ export default function App() {
       const res = await fetch('/api/production');
       const data = await res.json();
       if (res.ok && Array.isArray(data)) {
-        // Sort by timestamp descending and take last 3
+        // Sort by timestamp descending and take last 50 for the Live Feed search pool
         const sorted = [...data].sort((a, b) => new Date(b.EntryTimestamp).getTime() - new Date(a.EntryTimestamp).getTime());
-        setRecentEntries(sorted.slice(0, 5)); // We can show 3-5
+        setRecentEntries(sorted.slice(0, 50));
       } else {
         console.error("Production API error or non-array data:", data);
         setRecentEntries([]);
@@ -424,10 +433,11 @@ export default function App() {
         fetchRecentEntries();
         fetchNextRollId();
         fetchPreviousRollId();
+        const nextShiftInfo = getShiftAndDateForDhaka();
         // Clear the entire form on successful data transmission
         setFormData({
-          ProductionDate: formatDate(new Date()),
-          Shift: 'A',
+          ProductionDate: nextShiftInfo.productionDate,
+          Shift: nextShiftInfo.shift,
           ProductionType: '',
           OperatorID: '',
           OperatorName: '',
@@ -454,6 +464,71 @@ export default function App() {
       setIsLoading(false);
     }
   };
+
+  const handleUpdateEntry = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingEntry || !editingEntry.RollID) return;
+    setIsSavingEdit(true);
+    try {
+      const res = await fetch('/api/production/update', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(editingEntry)
+      });
+      const data = await res.json();
+      if (res.ok) {
+        showToast("Entry Updated Successfully", 'success');
+        setEditingEntry(null);
+        await Promise.all([
+          fetchDashboard(),
+          fetchRecentEntries(),
+          fetchProductionRecords()
+        ]);
+      } else {
+        showToast(data.message || "Failed to update entry", 'error');
+      }
+    } catch (err) {
+      showToast("Network error during update", 'error');
+    } finally {
+      setIsSavingEdit(false);
+    }
+  };
+
+  const filteredRecords = productionRecords.filter((record: any) => {
+    if (!recordSearchQuery) return true;
+    const q = recordSearchQuery.toLowerCase();
+    return (
+      (record.RollID || "").toLowerCase().includes(q) ||
+      (record.OperatorName || "").toLowerCase().includes(q) ||
+      (record.OperatorID || "").toLowerCase().includes(q) ||
+      (record.MachineNo || "").toLowerCase().includes(q) ||
+      (record.PINumber || "").toString().toLowerCase().includes(q) ||
+      (record.Material || "").toLowerCase().includes(q) ||
+      (record.ProductionDate || "").toLowerCase().includes(q) ||
+      (record.RollLocation || "").toLowerCase().includes(q) ||
+      (record.ProductionType || "").toLowerCase().includes(q)
+    );
+  });
+
+  const filteredFeed = recentEntries.filter((entry: any) => {
+    if (!feedSearchQuery) return true;
+    const q = feedSearchQuery.toLowerCase();
+    return (
+      (entry.RollID || "").toLowerCase().includes(q) ||
+      (entry.OperatorID || "").toLowerCase().includes(q) ||
+      (entry.OperatorName || "").toLowerCase().includes(q) ||
+      (entry.MachineNo || "").toLowerCase().includes(q) ||
+      (entry.Material || "").toLowerCase().includes(q) ||
+      (entry.RollLocation || "").toLowerCase().includes(q) ||
+      (entry.ProductionType || "").toLowerCase().includes(q) ||
+      (entry.Shift || "").toLowerCase().includes(q)
+    );
+  });
+
+  const displayedFeed = feedSearchQuery ? filteredFeed : filteredFeed.slice(0, 7);
+  const metricsFeed = recentEntries.slice(0, 7);
 
   return (
     <div className="min-h-screen flex text-slate-800 industrial-grid">
@@ -910,24 +985,47 @@ export default function App() {
 
                   {/* Right Column: High-Density Feed */}
                   <div className="xl:col-span-4 space-y-4">
-                    <div className="flex items-center justify-between px-1">
-                       <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest flex items-center gap-2">
-                         <Activity size={14} className="text-brand-primary" />
-                         Live Feed
-                       </h3>
-                       <p className="text-[9px] font-mono text-slate-400">SESSION_SYNC: OK</p>
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 px-1">
+                      <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest flex items-center gap-2">
+                        <Activity size={14} className="text-brand-primary" />
+                        Live Feed
+                      </h3>
+                      <div className="flex items-center gap-2">
+                        <div className="relative">
+                          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" size={11} />
+                          <input
+                            type="text"
+                            placeholder="Search feed..."
+                            value={feedSearchQuery}
+                            onChange={(e) => setFeedSearchQuery(e.target.value)}
+                            className="bg-slate-50 border border-slate-200 focus:border-brand-primary focus:bg-white rounded-lg pl-7 pr-6 py-1.5 text-[10px] text-slate-950 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-primary/20 transition-all font-semibold max-w-[130px] md:max-w-[150px]"
+                          />
+                          {feedSearchQuery && (
+                            <button
+                              onClick={() => setFeedSearchQuery("")}
+                              className="absolute right-2 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400 hover:text-slate-600 focus:outline-none"
+                            >
+                              ×
+                            </button>
+                          )}
+                        </div>
+                        <p className="text-[9px] font-mono text-slate-400 shrink-0">SESSION_SYNC: OK</p>
+                      </div>
                     </div>
 
                     <div className="space-y-3 max-h-[600px] overflow-y-auto pr-1">
-                      {recentEntries.length === 0 ? (
+                      {displayedFeed.length === 0 ? (
                         <div className="glass-panel p-10 flex flex-col items-center text-center space-y-3 opacity-40">
                           <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center">
                             <Clock size={24} />
                           </div>
                           <p className="text-[10px] font-bold uppercase tracking-wider">Awaiting Stream</p>
+                          {feedSearchQuery && (
+                            <p className="text-[9px] font-medium text-slate-400 mt-1">No matching logs found</p>
+                          )}
                         </div>
                       ) : (
-                        recentEntries.map((entry, idx) => (
+                        displayedFeed.map((entry, idx) => (
                           <motion.div 
                             initial={{ opacity: 0, x: 10 }}
                             animate={{ opacity: 1, x: 0 }}
@@ -942,7 +1040,17 @@ export default function App() {
                                 <p className="font-mono text-xs font-black text-slate-900 tracking-tighter">{entry.RollID}</p>
                                 <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 border border-slate-200">{entry.MachineNo}</span>
                               </div>
-                              <p className="text-[10px] font-bold text-brand-primary">{entry.FinishedKgs} kg</p>
+                              <div className="flex items-center gap-2">
+                                <p className="text-[10px] font-bold text-brand-primary">{entry.FinishedKgs} kg</p>
+                                <button
+                                  type="button"
+                                  onClick={() => setEditingEntry({ ...entry })}
+                                  className="p-1.5 rounded-md hover:bg-slate-100 text-slate-400 hover:text-brand-primary transition-all flex items-center justify-center cursor-pointer"
+                                  title="Edit entry"
+                                >
+                                  <Edit3 size={12} />
+                                </button>
+                              </div>
                             </div>
                             
                             <div className="flex items-center justify-between opacity-70 group-hover:opacity-100 transition-opacity">
@@ -972,13 +1080,13 @@ export default function App() {
                         <div className="space-y-0.5">
                           <p className="text-[9px] font-bold text-slate-400 uppercase">Yield Sum</p>
                           <p className="text-sm font-mono font-bold text-slate-800">
-                            {recentEntries.reduce((acc, curr) => acc + (Number(curr.FinishedKgs) || 0), 0).toFixed(1)}k
+                            {metricsFeed.reduce((acc, curr) => acc + (Number(curr.FinishedKgs) || 0), 0).toFixed(1)}k
                           </p>
                         </div>
                         <div className="space-y-0.5">
                           <p className="text-[9px] font-bold text-slate-400 uppercase">Avg Waste</p>
                           <p className="text-sm font-mono font-bold text-rose-600">
-                            {(recentEntries.reduce((acc, curr) => acc + (Number(curr.ScrapKgs) || 0), 0) / (recentEntries.length || 1)).toFixed(2)}k
+                            {(metricsFeed.reduce((acc, curr) => acc + (Number(curr.ScrapKgs) || 0), 0) / (metricsFeed.length || 1)).toFixed(2)}k
                           </p>
                         </div>
                       </div>
@@ -1506,12 +1614,38 @@ export default function App() {
                   </button>
                 </div>
 
+                {/* Search field for old database entries */}
+                <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex flex-col md:flex-row gap-4 items-center justify-between">
+                  <div className="relative w-full md:max-w-md">
+                    <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
+                    <input
+                      type="text"
+                      placeholder="Search records by Roll ID, Operator, Machine, PI, Material..."
+                      value={recordSearchQuery}
+                      onChange={(e) => setRecordSearchQuery(e.target.value)}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-10 py-2.5 text-xs text-slate-950 placeholder:text-slate-400 focus:outline-none focus:ring-4 focus:ring-brand-primary/20 focus:border-brand-primary focus:bg-brand-primary/5 transition-all font-semibold"
+                    />
+                    {recordSearchQuery && (
+                      <button 
+                        onClick={() => setRecordSearchQuery("")}
+                        className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-[10px] font-black uppercase tracking-wider"
+                      >
+                        Clear
+                      </button>
+                    )}
+                  </div>
+                  <div className="text-[10px] text-slate-500 font-black uppercase tracking-wider">
+                    Showing <span className="text-brand-primary font-mono">{filteredRecords.length}</span> of <span className="font-mono">{productionRecords.length}</span> records
+                  </div>
+                </div>
+
                 {/* Google Sheets Sync Card */}
                 <div className="glass-panel overflow-hidden border-slate-200">
                   <div className="overflow-x-auto">
-                    <table className="w-full text-left border-collapse min-w-[2000px]">
+                    <table className="w-full text-left border-collapse min-w-[2100px]">
                       <thead>
                         <tr className="bg-slate-50 border-b border-slate-100">
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap sticky left-0 bg-slate-50 z-10 border-r border-slate-200 shadow-sm text-center">Action</th>
                           <th className="px-4 py-4 text-[9px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Roll ID</th>
                           <th className="px-4 py-4 text-[9px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Production Date</th>
                           <th className="px-4 py-4 text-[9px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Shift</th>
@@ -1538,8 +1672,19 @@ export default function App() {
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-50">
-                        {productionRecords.map((record, idx) => (
-                          <tr key={record.RollID || idx} className="hover:bg-slate-50/50 transition-colors">
+                        {filteredRecords.map((record, idx) => (
+                          <tr key={record.RollID || idx} className="hover:bg-slate-50/50 transition-colors group">
+                            <td className="px-4 py-3 text-center sticky left-0 bg-white group-hover:bg-slate-50/80 z-10 border-r border-slate-200 shadow-sm">
+                              <button
+                                type="button"
+                                onClick={() => setEditingEntry({ ...record })}
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-brand-primary/10 hover:bg-brand-primary text-brand-primary hover:text-white rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all duration-200 cursor-pointer shadow-sm hover:shadow-brand-primary/20"
+                                title="Edit entry"
+                              >
+                                <Edit3 size={11} />
+                                Edit
+                              </button>
+                            </td>
                             <td className="px-4 py-3"><span className="font-mono text-[11px] font-black text-brand-primary">{record.RollID}</span></td>
                             <td className="px-4 py-3 text-[11px] font-bold text-slate-700">{record.ProductionDate}</td>
                             <td className="px-4 py-3 text-[11px] font-medium text-slate-900">{record.Shift}</td>
@@ -1657,6 +1802,317 @@ export default function App() {
                     </button>
                 </div>
               </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Edit Entry Modal */}
+      <AnimatePresence>
+        {editingEntry && (
+          <div className="fixed inset-0 z-[110] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setEditingEntry(null)}
+              className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm"
+            />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95, y: 15 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 15 }}
+              className="w-full max-w-2xl bg-white rounded-3xl shadow-2xl relative z-10 flex flex-col max-h-[90vh]"
+            >
+              {/* Modal Header */}
+              <div className="p-6 border-b border-slate-100 flex items-center justify-between bg-slate-50 rounded-t-3xl text-left">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-brand-primary/10 flex items-center justify-center text-brand-primary">
+                    <Edit3 size={18} />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-display font-black text-slate-900 uppercase">Correct Entry Error</h3>
+                    <p className="font-mono text-[11px] font-black tracking-tight text-brand-primary">ROLL ID: {editingEntry.RollID}</p>
+                  </div>
+                </div>
+                <button type="button" onClick={() => setEditingEntry(null)} className="text-slate-400 hover:text-slate-600 transition-colors p-1.5 rounded-lg hover:bg-slate-100 cursor-pointer">
+                  <X size={18} />
+                </button>
+              </div>
+
+              {/* Modal Form */}
+              <form onSubmit={handleUpdateEntry} className="flex flex-col flex-1 overflow-hidden">
+                <div className="p-6 md:p-8 space-y-6 overflow-y-auto max-h-[60vh] text-left">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-4">
+                    
+                    {/* Production Date */}
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Production Date</label>
+                      <input 
+                        type="date" 
+                        required
+                        value={editingEntry.ProductionDate || ""} 
+                        onChange={(e) => setEditingEntry({ ...editingEntry, ProductionDate: e.target.value })}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-xs font-semibold text-slate-900 focus:outline-none focus:ring-4 focus:ring-brand-primary/20 focus:border-brand-primary focus:bg-brand-primary/5 transition-all"
+                      />
+                    </div>
+
+                    {/* Shift */}
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Shift</label>
+                      <select 
+                        required
+                        value={editingEntry.Shift || ""} 
+                        onChange={(e) => setEditingEntry({ ...editingEntry, Shift: e.target.value })}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-xs font-semibold text-slate-900 focus:outline-none focus:ring-4 focus:ring-brand-primary/20 focus:border-brand-primary focus:bg-brand-primary/5 transition-all"
+                      >
+                        <option value="">Select Shift</option>
+                        {editingEntry.Shift && !masterStore.shifts.includes(editingEntry.Shift) && (
+                          <option value={editingEntry.Shift}>{editingEntry.Shift}</option>
+                        )}
+                        {masterStore.shifts.map((s: string) => <option key={s} value={s}>{s}</option>)}
+                      </select>
+                    </div>
+
+                    {/* Production Type */}
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Production Type</label>
+                      <select 
+                        required
+                        value={editingEntry.ProductionType || ""} 
+                        onChange={(e) => setEditingEntry({ ...editingEntry, ProductionType: e.target.value })}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-xs font-semibold text-slate-900 focus:outline-none focus:ring-4 focus:ring-brand-primary/20 focus:border-brand-primary focus:bg-brand-primary/5 transition-all"
+                      >
+                        <option value="">Select Type</option>
+                        {editingEntry.ProductionType && !masterStore.productionTypes.includes(editingEntry.ProductionType) && (
+                          <option value={editingEntry.ProductionType}>{editingEntry.ProductionType}</option>
+                        )}
+                        {masterStore.productionTypes.map((t: string) => <option key={t} value={t}>{t}</option>)}
+                      </select>
+                    </div>
+
+                    {/* Operator ID */}
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Operator</label>
+                      <select 
+                        required
+                        value={editingEntry.OperatorID || ""} 
+                        onChange={(e) => {
+                          const opId = e.target.value;
+                          const op = operators.find(o => o.id === opId);
+                          setEditingEntry({ 
+                            ...editingEntry, 
+                            OperatorID: opId, 
+                            OperatorName: op ? op.name : editingEntry.OperatorName 
+                          });
+                        }}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-xs font-semibold text-slate-900 focus:outline-none focus:ring-4 focus:ring-brand-primary/20 focus:border-brand-primary focus:bg-brand-primary/5 transition-all"
+                      >
+                        <option value="">Select Operator</option>
+                        {editingEntry.OperatorID && !operators.some((op: any) => op.id === editingEntry.OperatorID) && (
+                          <option value={editingEntry.OperatorID}>{editingEntry.OperatorID} ({editingEntry.OperatorName || 'Unknown Operator'})</option>
+                        )}
+                        {operators.map((op: any) => <option key={op.id} value={op.id}>{op.id} ({op.name})</option>)}
+                      </select>
+                    </div>
+
+                    {/* Machine No */}
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Machine No</label>
+                      <select 
+                        required
+                        value={editingEntry.MachineNo || ""} 
+                        onChange={(e) => setEditingEntry({ ...editingEntry, MachineNo: e.target.value })}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-xs font-semibold text-slate-900 focus:outline-none focus:ring-4 focus:ring-brand-primary/20 focus:border-brand-primary"
+                      >
+                        <option value="">Select Machine</option>
+                        {editingEntry.MachineNo && !machines.some((m: any) => m.id === editingEntry.MachineNo) && (
+                          <option value={editingEntry.MachineNo}>{editingEntry.MachineNo}</option>
+                        )}
+                        {machines.map((m: any) => <option key={m.id} value={m.id}>{m.id}</option>)}
+                      </select>
+                    </div>
+
+                    {/* Year */}
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Year</label>
+                      <select 
+                        required
+                        value={editingEntry.Year || ""} 
+                        onChange={(e) => setEditingEntry({ ...editingEntry, Year: e.target.value })}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-xs font-semibold text-slate-900 focus:outline-none"
+                      >
+                        <option value="">Select Year</option>
+                        {editingEntry.Year && !masterStore.years.includes(editingEntry.Year) && (
+                          <option value={editingEntry.Year}>{editingEntry.Year}</option>
+                        )}
+                        {masterStore.years.map((y: string) => <option key={y} value={y}>{y}</option>)}
+                      </select>
+                    </div>
+
+                    {/* PI Number */}
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">PI Number</label>
+                      <input 
+                        type="number" 
+                        required
+                        value={editingEntry.PINumber || ""} 
+                        onChange={(e) => setEditingEntry({ ...editingEntry, PINumber: e.target.value })}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-xs font-semibold text-slate-900 focus:outline-none focus:ring-4 focus:ring-brand-primary/20 focus:border-brand-primary focus:bg-brand-primary/5 transition-all"
+                      />
+                    </div>
+
+                    {/* Tube Size */}
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Tube Size (mm)</label>
+                      <input 
+                        type="number" 
+                        step="0.01"
+                        required
+                        value={editingEntry.TubeSize || ""} 
+                        onChange={(e) => setEditingEntry({ ...editingEntry, TubeSize: e.target.value })}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-xs font-semibold text-slate-900 focus:outline-none focus:ring-4 focus:ring-brand-primary/20 focus:border-brand-primary focus:bg-brand-primary/5 transition-all"
+                      />
+                    </div>
+
+                    {/* UOM */}
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">UOM</label>
+                      <select 
+                        required
+                        value={editingEntry.UOM || ""} 
+                        onChange={(e) => setEditingEntry({ ...editingEntry, UOM: e.target.value })}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-xs font-semibold text-slate-900 focus:outline-none focus:ring-4 focus:ring-brand-primary/20"
+                      >
+                        <option value="">Select UOM</option>
+                        {editingEntry.UOM && !masterStore.uoms.includes(editingEntry.UOM) && (
+                          <option value={editingEntry.UOM}>{editingEntry.UOM}</option>
+                        )}
+                        {masterStore.uoms.map((u: string) => <option key={u} value={u}>{u}</option>)}
+                      </select>
+                    </div>
+
+                    {/* Material */}
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Raw Material</label>
+                      <select 
+                        required
+                        value={editingEntry.Material || ""} 
+                        onChange={(e) => setEditingEntry({ ...editingEntry, Material: e.target.value })}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-xs font-semibold text-slate-900 focus:outline-none focus:ring-4 focus:ring-brand-primary/20 focus:border-brand-primary"
+                      >
+                        <option value="">Select Material</option>
+                        {editingEntry.Material && !masterStore.materials.includes(editingEntry.Material) && (
+                          <option value={editingEntry.Material}>{editingEntry.Material}</option>
+                        )}
+                        {masterStore.materials.map((m: string) => <option key={m} value={m}>{m}</option>)}
+                      </select>
+                    </div>
+
+                    {/* Micron */}
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Micron</label>
+                      <input 
+                        type="number" 
+                        required
+                        value={editingEntry.Micron || ""} 
+                        onChange={(e) => setEditingEntry({ ...editingEntry, Micron: e.target.value })}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-xs font-semibold text-slate-900 focus:outline-none focus:ring-4 focus:ring-brand-primary/20 focus:border-brand-primary focus:bg-brand-primary/5 transition-all"
+                      />
+                    </div>
+
+                    {/* InLine Print */}
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">In-Line Print</label>
+                      <select 
+                        required
+                        value={editingEntry.InLinePrint || ""} 
+                        onChange={(e) => setEditingEntry({ ...editingEntry, InLinePrint: e.target.value })}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-xs font-semibold text-slate-900 focus:outline-none focus:ring-4 focus:ring-brand-primary/20"
+                      >
+                        <option value="">Select InLine Print</option>
+                        {editingEntry.InLinePrint && !masterStore.inlinePrintOptions.includes(editingEntry.InLinePrint) && (
+                          <option value={editingEntry.InLinePrint}>{editingEntry.InLinePrint}</option>
+                        )}
+                        {masterStore.inlinePrintOptions.map((o: string) => <option key={o} value={o}>{o}</option>)}
+                      </select>
+                    </div>
+
+                    {/* Finished Meter */}
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Finished Meter</label>
+                      <input 
+                        type="number" 
+                        required
+                        value={editingEntry.FinishedMeter || ""} 
+                        onChange={(e) => setEditingEntry({ ...editingEntry, FinishedMeter: e.target.value })}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-xs font-semibold text-slate-900 focus:outline-none"
+                      />
+                    </div>
+
+                    {/* Finished Kgs */}
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Finished KG</label>
+                      <input 
+                        type="number" 
+                        step="0.01"
+                        required
+                        value={editingEntry.FinishedKgs || ""} 
+                        onChange={(e) => setEditingEntry({ ...editingEntry, FinishedKgs: e.target.value })}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-xs font-semibold text-slate-900 focus:outline-none focus:ring-4 focus:ring-brand-primary/20 focus:border-brand-primary focus:bg-brand-primary/5 transition-all font-bold text-brand-primary"
+                      />
+                    </div>
+
+                    {/* Scrap Kgs */}
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest text-rose-500">Waste Scrap (KG)</label>
+                      <input 
+                        type="number" 
+                        step="0.01"
+                        required
+                        value={editingEntry.ScrapKgs || ""} 
+                        onChange={(e) => setEditingEntry({ ...editingEntry, ScrapKgs: e.target.value })}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-xs font-semibold text-slate-900 focus:outline-none focus:ring-4 focus:ring-brand-primary/20 focus:border-brand-primary focus:bg-brand-primary/5 transition-all text-rose-500 font-bold"
+                      />
+                    </div>
+
+                    {/* Roll Location */}
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Roll Location</label>
+                      <input 
+                        type="text" 
+                        required
+                        value={editingEntry.RollLocation || ""} 
+                        onChange={(e) => setEditingEntry({ ...editingEntry, RollLocation: e.target.value })}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-xs font-semibold text-slate-900 focus:outline-none focus:ring-4 focus:ring-brand-primary/20 focus:border-brand-primary focus:bg-brand-primary/5 transition-all"
+                      />
+                    </div>
+
+                  </div>
+                </div>
+
+                {/* Modal Footer */}
+                <div className="p-6 bg-slate-50 border-t border-slate-100 flex items-center justify-end gap-3 rounded-b-3xl">
+                  <button 
+                    type="button" 
+                    onClick={() => setEditingEntry(null)}
+                    className="px-5 py-2.5 rounded-xl text-slate-500 hover:text-slate-700 hover:bg-slate-100 transition-colors text-xs font-black uppercase tracking-widest cursor-pointer"
+                  >
+                    Discard Changes
+                  </button>
+                  <button 
+                    type="submit"
+                    disabled={isSavingEdit}
+                    className="px-8 py-2.5 bg-brand-primary text-white rounded-xl text-xs font-black uppercase tracking-[0.15em] shadow-xl shadow-brand-primary/10 hover:brightness-110 active:scale-[0.98] transition-all duration-200 disabled:opacity-50 flex items-center gap-2 cursor-pointer"
+                  >
+                    {isSavingEdit ? (
+                      <div className="w-4 h-4 border-2 border-white/20 border-t-white rounded-full animate-spin" />
+                    ) : (
+                      <>Save Changes</>
+                    )}
+                  </button>
+                </div>
+              </form>
             </motion.div>
           </div>
         )}
