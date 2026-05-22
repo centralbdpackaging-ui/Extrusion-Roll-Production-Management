@@ -29,7 +29,9 @@ import {
   RefreshCw,
   LogOut,
   CalendarDays,
-  FileSpreadsheet
+  FileSpreadsheet,
+  Search,
+  X
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn, formatDate } from './lib/utils';
@@ -117,7 +119,7 @@ export default function App() {
     ProductionType: 'Commercial',
     OperatorID: '',
     MachineNo: '',
-    Year: '2026',
+    Year: new Date().getFullYear().toString(),
     PINumber: '',
     TubeSize: '',
     UOM: '',
@@ -422,20 +424,27 @@ export default function App() {
         fetchRecentEntries();
         fetchNextRollId();
         fetchPreviousRollId();
-        // Reset form but keep shift/date/machine as requested
-        setFormData(prev => ({
-          ...prev,
+        // Clear the entire form on successful data transmission, keeping defaults like current year
+        setFormData({
+          ProductionDate: formatDate(new Date()),
+          Shift: 'A',
+          ProductionType: 'Commercial',
+          OperatorID: '',
+          OperatorName: '',
+          MachineNo: '',
+          Year: new Date().getFullYear().toString(),
           PINumber: '',
+          TubeSize: '',
+          UOM: '',
+          Material: '',
+          Micron: '',
+          InLinePrint: '',
           FinishedMeter: '',
           FinishedKgs: '',
           ScrapKgs: '',
-          RollID: '',
           RollLocation: '',
-          MachineNo: '',
-          UOM: '',
-          Material: '',
-          InLinePrint: ''
-        }));
+          MachineStatus: 'Running'
+        });
       } else {
         showToast(data.message || "Error saving entry", 'error');
       }
@@ -1815,27 +1824,121 @@ function InputField({ label, name, icon, ...props }: any) {
   );
 }
 
-function SelectField({ label, name, icon, options, placeholder, ...props }: any) {
+function SelectField({ label, name, icon, options = [], placeholder, value, onChange, ...props }: any) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const dropdownRef = React.useRef<HTMLDivElement>(null);
+
+  // Close dropdown on click outside
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setIsOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, []);
+
+  // Update searchQuery when value changes (e.g. cleared after form submit)
+  useEffect(() => {
+    setSearchQuery(value || '');
+  }, [value]);
+
+  const filteredOptions = (options || []).filter((opt: string) =>
+    opt ? opt.toLowerCase().includes(searchQuery.toLowerCase()) : false
+  );
+
+  const handleSelect = (opt: string) => {
+    if (onChange) {
+      onChange({ target: { name, value: opt } });
+    }
+    setIsOpen(false);
+    setSearchQuery(opt);
+  };
+
+  const handleClear = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (onChange) {
+      onChange({ target: { name, value: '' } });
+    }
+    setSearchQuery('');
+    setIsOpen(false);
+  };
+
   return (
-    <div className="space-y-1">
+    <div className="space-y-1 relative" ref={dropdownRef}>
       <label className="text-[9px] font-bold text-slate-400 uppercase tracking-widest flex items-center gap-1.5 ml-1">
         {icon}
         {label}
       </label>
       <div className="relative">
-        <select 
-          name={name}
-          {...props}
-          className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 text-xs text-slate-900 focus:outline-none focus:ring-4 focus:ring-brand-primary/5 focus:border-brand-primary/30 transition-all font-medium appearance-none"
-        >
-          {placeholder && <option value="" disabled>{placeholder}</option>}
-          {options.map((opt: string) => (
-            <option key={opt} value={opt} className="bg-white">{opt}</option>
-          ))}
-        </select>
-        <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">
-          <ChevronDown size={12} />
+        <input
+          type="text"
+          placeholder={placeholder || "Select..."}
+          value={isOpen ? searchQuery : (value || '')}
+          onChange={(e) => {
+            setSearchQuery(e.target.value);
+            setIsOpen(true);
+          }}
+          onFocus={() => {
+            setIsOpen(true);
+            setSearchQuery('');
+          }}
+          className="w-full bg-slate-50 border border-slate-200 rounded-lg pl-3 pr-10 py-1.5 text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-4 focus:ring-brand-primary/5 focus:border-brand-primary/30 transition-all font-medium h-[34px] cursor-text"
+        />
+        
+        <div className="absolute right-2.5 top-1/2 -translate-y-1/2 flex items-center gap-1 text-slate-400">
+          {value && (
+            <button
+              type="button"
+              onClick={handleClear}
+              className="hover:text-rose-500 focus:outline-none p-0.5"
+            >
+              <X size={12} />
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => {
+              setIsOpen(!isOpen);
+              if (!isOpen) setSearchQuery('');
+            }}
+            className="focus:outline-none hover:text-slate-600 p-0.5"
+          >
+            <ChevronDown size={12} className={cn("transition-transform duration-200", isOpen && "rotate-180")} />
+          </button>
         </div>
+
+        {/* Dropdown Menu */}
+        {isOpen && (
+          <div className="absolute z-50 w-full mt-1 bg-white border border-slate-200 rounded-lg shadow-xl overflow-hidden max-h-48 flex flex-col animate-in fade-in slide-in-from-top-1 duration-150">
+            {/* Options List */}
+            <div className="overflow-y-auto py-1 max-h-48 divide-y divide-slate-50">
+              {filteredOptions.length === 0 ? (
+                <div className="px-3 py-2 text-xs text-slate-400 text-center italic">
+                  No options found
+                </div>
+              ) : (
+                filteredOptions.map((opt: string) => (
+                  <button
+                    key={opt}
+                    type="button"
+                    onClick={() => handleSelect(opt)}
+                    className={cn(
+                      "w-full text-left px-3 py-2 text-xs font-semibold transition-colors hover:bg-slate-50 cursor-pointer block truncate",
+                      value === opt ? "bg-brand-primary/5 text-brand-primary font-black animate-pulse" : "text-slate-700"
+                    )}
+                  >
+                    {opt}
+                  </button>
+                ))
+              )}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
