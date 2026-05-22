@@ -169,18 +169,33 @@ app.get("/api/debug/firebase", async (req, res) => {
           uoms: ['Kgs', 'Rolls', 'Meter', 'INCH'],
           materials: ['LDPE', 'HDPE', 'LLDPE', 'PP', 'BOPP'],
           inlinePrintOptions: ['Yes', 'No'],
-          years: ['2023', '2024', '2025', '2026', '2027']
+          years: ['2023', '2024', '2025', '2026', '2027'],
+          breakdownReasons: ['Mechanical', 'Electrical', 'Pneumatic', 'Hydraulic', 'Sensor Failure', 'Heater Band Burnout'],
+          idleReasons: ['No Material', 'No Operator', 'Power Interruption', 'Core Shortage', 'Routine Clean-up', 'Awaiting Maintenance Handover']
         });
       } else {
-        // Partially sync to add Day and Night if they are missing
+        // Partially sync to add Day/Night or missing tables
         const existingData = masterDoc.data() || {};
+        let updated = false;
+
         const existingShifts = existingData.shifts || [];
         if (!existingShifts.includes('Day') || !existingShifts.includes('Night')) {
-          const updatedShifts = Array.from(new Set(['Day', 'Night', ...existingShifts]));
-          await setDoc(doc(db, 'master_store', 'dropdowns'), {
-            ...existingData,
-            shifts: updatedShifts
-          }, { merge: true });
+          existingData.shifts = Array.from(new Set(['Day', 'Night', ...existingShifts]));
+          updated = true;
+        }
+
+        if (!existingData.breakdownReasons) {
+          existingData.breakdownReasons = ['Mechanical', 'Electrical', 'Pneumatic', 'Hydraulic', 'Sensor Failure', 'Heater Band Burnout'];
+          updated = true;
+        }
+
+        if (!existingData.idleReasons) {
+          existingData.idleReasons = ['No Material', 'No Operator', 'Power Interruption', 'Core Shortage', 'Routine Clean-up', 'Awaiting Maintenance Handover'];
+          updated = true;
+        }
+
+        if (updated) {
+          await setDoc(doc(db, 'master_store', 'dropdowns'), existingData, { merge: true });
         }
       }
       console.log("[Seeding] Database check completed.");
@@ -198,22 +213,25 @@ app.get("/api/debug/firebase", async (req, res) => {
 
   const getMasterStore = async () => {
     const db = initializeFirebase();
-    if (!db) return {
+    const defaults = {
       shifts: ['Day', 'Night', 'A', 'B', 'C'],
       productionTypes: ['Commercial', 'R&D', 'Trial', 'Sample'],
       uoms: ['Kgs', 'Rolls', 'Meter', 'INCH'],
       materials: ['LDPE', 'HDPE', 'LLDPE', 'PP', 'BOPP'],
       inlinePrintOptions: ['Yes', 'No'],
-      years: ['2023', '2024', '2025', '2026', '2027']
+      years: ['2023', '2024', '2025', '2026', '2027'],
+      breakdownReasons: ['Mechanical', 'Electrical', 'Pneumatic', 'Hydraulic', 'Sensor Failure', 'Heater Band Burnout'],
+      idleReasons: ['No Material', 'No Operator', 'Power Interruption', 'Core Shortage', 'Routine Clean-up', 'Awaiting Maintenance Handover']
     };
+    if (!db) return defaults;
     const d = await getDoc(doc(db, 'master_store', 'dropdowns'));
-    return d.data() || {
-      shifts: ['Day', 'Night', 'A', 'B', 'C'],
-      productionTypes: ['Commercial', 'R&D', 'Trial', 'Sample'],
-      uoms: ['Kgs', 'Rolls', 'Meter', 'INCH'],
-      materials: ['LDPE', 'HDPE', 'LLDPE', 'PP', 'BOPP'],
-      inlinePrintOptions: ['Yes', 'No'],
-      years: ['2023', '2024', '2025', '2026', '2027']
+    if (!d.exists()) {
+      return defaults;
+    }
+    const data = d.data() || {};
+    return {
+      ...defaults,
+      ...data
     };
   };
 
@@ -330,7 +348,12 @@ const safeHandler = (fn: (req: any, res: any) => Promise<void>) => async (req: a
       type,
       target: Number(target) || 0,
       status: "Idle",
-      reason: "Initial Setup"
+      reason: "Initial Setup",
+      numIdle: 0,
+      numBreakdown: 0,
+      idleTime: 0,
+      breakdownTime: 0,
+      lastStatusChange: new Date().toISOString()
     };
     await setDoc(doc(db, 'machines', id), newMachine);
     res.json({ message: "Machine created successfully", machine: newMachine });
@@ -338,14 +361,19 @@ const safeHandler = (fn: (req: any, res: any) => Promise<void>) => async (req: a
 
   app.post("/api/machines/status", safeHandler(async (req, res) => {
     const db = initializeFirebase();
-    const { id, status, reason, target } = req.body;
+    const { id, status, reason, target, numIdle, numBreakdown, idleTime, breakdownTime, lastStatusChange } = req.body;
     const docRef = doc(db, 'machines', id);
     const d = await getDoc(docRef);
     if (d.exists()) {
       const updates: any = {};
       if (status) updates.status = status;
       if (reason !== undefined) updates.reason = reason;
-      if (target) updates.target = target;
+      if (target !== undefined) updates.target = target;
+      if (numIdle !== undefined) updates.numIdle = Number(numIdle) || 0;
+      if (numBreakdown !== undefined) updates.numBreakdown = Number(numBreakdown) || 0;
+      if (idleTime !== undefined) updates.idleTime = Number(idleTime) || 0;
+      if (breakdownTime !== undefined) updates.breakdownTime = Number(breakdownTime) || 0;
+      if (lastStatusChange !== undefined) updates.lastStatusChange = lastStatusChange;
       await updateDoc(docRef, updates);
       const updated = await getDoc(docRef);
       res.json({ message: "Machine updated successfully", machine: updated.data() });
@@ -487,6 +515,11 @@ const safeHandler = (fn: (req: any, res: any) => Promise<void>) => async (req: a
       }
     });
   }));
+
+  // Auto-run database check on startup to merge any new tables securely
+  seedInitialData().catch(err => {
+    console.error("[Startup Seeding Check Failed]:", err);
+  });
 
 export { app };
 export default app;

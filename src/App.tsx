@@ -90,6 +90,11 @@ interface MachineMaster {
   target: number;
   status: 'Running' | 'Idle' | 'Breakdown';
   reason: string;
+  numIdle?: number;
+  numBreakdown?: number;
+  idleTime?: number;
+  breakdownTime?: number;
+  lastStatusChange?: string;
 }
 
 interface OperatorMaster {
@@ -155,7 +160,9 @@ export default function App() {
     uoms: ['Kgs', 'Rolls', 'Meter', 'INCH'],
     materials: ['LDPE', 'HDPE', 'LLDPE', 'PP', 'BOPP'],
     inlinePrintOptions: ['Yes', 'No'],
-    years: ['2023', '2024', '2025', '2026', '2027']
+    years: ['2023', '2024', '2025', '2026', '2027'],
+    breakdownReasons: ['Mechanical', 'Electrical', 'Pneumatic', 'Hydraulic', 'Sensor Failure', 'Heater Band Burnout'],
+    idleReasons: ['No Material', 'No Operator', 'Power Interruption', 'Core Shortage', 'Routine Clean-up', 'Awaiting Maintenance Handover']
   });
 
   const [fetchError, setFetchError] = useState<string | null>(null);
@@ -168,6 +175,14 @@ export default function App() {
   
   const [user, setUser] = useState<User | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [tick, setTick] = useState(0);
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setTick(t => t + 1);
+    }, 5000);
+    return () => clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (u) => {
@@ -230,6 +245,7 @@ export default function App() {
       fetchRecentEntries();
       fetchNextRollId();
       fetchPreviousRollId();
+      fetchProductionRecords();
     }, 30000); // Refresh every 30s
     return () => clearInterval(interval);
   }, []);
@@ -239,7 +255,7 @@ export default function App() {
       const res = await fetch('/api/master-store');
       const data = await res.json();
       if (res.ok) {
-        setMasterStore(data);
+        setMasterStore((prev: any) => ({ ...prev, ...data }));
       }
     } catch (err) {
       console.error("Failed to fetch master store", err);
@@ -365,6 +381,58 @@ export default function App() {
     }
   };
 
+  const handleMachineStateChange = async (m: MachineMaster, newStatus: 'Running' | 'Idle' | 'Breakdown') => {
+    try {
+      const parentNow = new Date().toISOString();
+      const updates: Partial<MachineMaster> = {
+        status: newStatus,
+        lastStatusChange: parentNow
+      };
+
+      // 1. Calculate elapsed time in previous state if applicable
+      const oldStatus = m.status;
+      const lastChangeStr = m.lastStatusChange || new Date().toISOString();
+      const elapsedMs = Date.now() - new Date(lastChangeStr).getTime();
+      const elapsedHours = Number(Math.max(0, elapsedMs / (1000 * 60 * 60)).toFixed(3)) || 0;
+
+      if (oldStatus === 'Idle') {
+        updates.idleTime = Number(((m.idleTime || 0) + elapsedHours).toFixed(3));
+      } else if (oldStatus === 'Breakdown') {
+        updates.breakdownTime = Number(((m.breakdownTime || 0) + elapsedHours).toFixed(3));
+      }
+
+      // 2. Increment counters when entering a new state
+      if (newStatus === 'Idle') {
+        updates.numIdle = (m.numIdle || 0) + 1;
+        const defaultIdleReason = (masterStore.idleReasons && masterStore.idleReasons[0]) || 'No Material';
+        updates.reason = defaultIdleReason;
+      } else if (newStatus === 'Breakdown') {
+        updates.numBreakdown = (m.numBreakdown || 0) + 1;
+        const defaultBreakdownReason = (masterStore.breakdownReasons && masterStore.breakdownReasons[0]) || 'Mechanical';
+        updates.reason = defaultBreakdownReason;
+      } else if (newStatus === 'Running') {
+        updates.reason = 'NO_ALERTS';
+      }
+
+      // Update locally immediately for snappy interface feedback
+      setMachines(prev => prev.map(mach => mach.id === m.id ? { ...mach, ...updates } : mach));
+
+      const res = await fetch('/api/machines/status', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: m.id, ...updates })
+      });
+      if (res.ok) {
+        showToast(`Machine status set to ${newStatus}`, 'success');
+        fetchMachines();
+        fetchDashboard();
+      }
+    } catch (err) {
+      console.error(err);
+      showToast("Failed to change machine status", 'error');
+    }
+  };
+
   const showToast = (message: string, type: 'success' | 'error') => {
     setToast({ message, type });
     setTimeout(() => setToast(null), 3000);
@@ -412,7 +480,7 @@ export default function App() {
     });
 
     if (isAnyFieldBlank) {
-      showToast("Please complete all required fields before transmitting data.", 'error');
+      showToast("Please complete all required fields before saving data.", 'error');
       return;
     }
 
@@ -495,6 +563,40 @@ export default function App() {
       setIsSavingEdit(false);
     }
   };
+
+  // Current Dhaka date & shift information
+  const dhakaShiftInfo = getShiftAndDateForDhaka();
+  const currentProductionDateStr = dhakaShiftInfo.productionDate; // e.g. "2026-05-22"
+
+  // Filter records belonging to the current operational date
+  const todayRecords = productionRecords.filter((record: any) => record.ProductionDate === currentProductionDateStr);
+
+  // Day shift records for the current operational date
+  const todayDayRecords = todayRecords.filter((record: any) => record.Shift === 'Day');
+  
+  // Night shift records for the current operational date
+  const todayNightRecords = todayRecords.filter((record: any) => record.Shift === 'Night');
+
+  // Other shifts (e.g. A, B, C) if any records exist
+  const todayOtherRecords = todayRecords.filter((record: any) => record.Shift !== 'Day' && record.Shift !== 'Night');
+
+  // Today calculations
+  const todayTotalKgs = todayRecords.reduce((acc, curr) => acc + (Number(curr.FinishedKgs) || 0), 0);
+  const todayTotalRolls = todayRecords.length;
+  const todayTotalMeter = todayRecords.reduce((acc, curr) => acc + (Number(curr.FinishedMeter) || 0), 0);
+  const todayTotalScrap = todayRecords.reduce((acc, curr) => acc + (Number(curr.ScrapKgs) || 0), 0);
+
+  // Day shift calculations
+  const todayDayTotalKgs = todayDayRecords.reduce((acc, curr) => acc + (Number(curr.FinishedKgs) || 0), 0);
+  const todayDayTotalRolls = todayDayRecords.length;
+  const todayDayTotalMeter = todayDayRecords.reduce((acc, curr) => acc + (Number(curr.FinishedMeter) || 0), 0);
+  const todayDayTotalScrap = todayDayRecords.reduce((acc, curr) => acc + (Number(curr.ScrapKgs) || 0), 0);
+
+  // Night shift calculations
+  const todayNightTotalKgs = todayNightRecords.reduce((acc, curr) => acc + (Number(curr.FinishedKgs) || 0), 0);
+  const todayNightTotalRolls = todayNightRecords.length;
+  const todayNightTotalMeter = todayNightRecords.reduce((acc, curr) => acc + (Number(curr.FinishedMeter) || 0), 0);
+  const todayNightTotalScrap = todayNightRecords.reduce((acc, curr) => acc + (Number(curr.ScrapKgs) || 0), 0);
 
   const filteredRecords = productionRecords.filter((record: any) => {
     if (!recordSearchQuery) return true;
@@ -657,7 +759,8 @@ export default function App() {
           <div className="flex items-center gap-6">
             {dashboardData && dashboardData.dailyTotals && (
               <div className="hidden xl:flex items-center gap-8">
-                <MetricHead label="TOTAL KG" value={`${dashboardData.dailyTotals.totalKgs}`} unit="KG" />
+                <MetricHead label="TODAY KG (COMBINED)" value={`${todayTotalKgs.toFixed(1)}`} unit="KG" color="text-brand-primary animate-pulse" />
+                <MetricHead label="TOTAL KG (ALL-TIME)" value={`${dashboardData.dailyTotals.totalKgs}`} unit="KG" />
                 <MetricHead label="EFFICIENCY" value="94.2" unit="%" color="text-brand-success" />
                 <MetricHead label="ACTIVE" value={`${dashboardData.summary.filter(m => m.Status === 'Running').length}/${dashboardData.summary.length}`} unit="NODES" />
               </div>
@@ -716,33 +819,146 @@ export default function App() {
                 {/* Stats Grid */}
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
                    <StatCard 
-                    title="Shift Production" 
-                    value={(dashboardData && dashboardData.dailyTotals) ? `${dashboardData.dailyTotals.totalKgs}` : '--'} 
+                    title="Today's Combined Output" 
+                    value={todayTotalKgs.toFixed(1)} 
                     unit="KGS" 
-                    trend="+12% from avg" 
+                    trend={`${todayDayTotalKgs.toFixed(0)}k Day + ${todayNightTotalKgs.toFixed(0)}k Night`} 
                     icon={<TrendingUp className="text-emerald-400" />} 
                   />
                    <StatCard 
-                    title="Completed Rolls" 
-                    value={(dashboardData && dashboardData.dailyTotals) ? `${dashboardData.dailyTotals.totalRolls}` : '--'} 
+                    title="Today's Finished Rolls" 
+                    value={`${todayTotalRolls}`} 
                     unit="ROLLS" 
-                    trend="Ahead of target" 
+                    trend={`${todayDayTotalRolls} Day + ${todayNightTotalRolls} Night`} 
                     icon={<Package className="text-blue-400" />} 
                   />
                    <StatCard 
-                    title="Total Meterage" 
-                    value={(dashboardData && dashboardData.dailyTotals) ? `${dashboardData.dailyTotals.totalMeter}` : '--'} 
+                    title="Today's Total Meterage" 
+                    value={todayTotalMeter.toLocaleString()} 
                     unit="METER" 
-                    trend="Steady run rate" 
+                    trend={`${todayDayTotalMeter.toLocaleString()} Day + ${todayNightTotalMeter.toLocaleString()} Night`} 
                     icon={<Ruler className="text-amber-400" />} 
                   />
                    <StatCard 
-                    title="Plant Status" 
-                    value="Optimal" 
-                    unit="HEALTH" 
-                    trend="No major alerts" 
+                    title="Today's Waste/Scrap" 
+                    value={todayTotalScrap.toFixed(1)} 
+                    unit="KGS" 
+                    trend={`${todayDayTotalScrap.toFixed(1)} Day + ${todayNightTotalScrap.toFixed(1)} Night`} 
                     icon={<CheckCircle2 className="text-emerald-400" />} 
                   />
+                </div>
+
+                {/* Daily Shift Combined Summary Breakdown */}
+                <div className="glass-panel p-6 border-brand-primary/10 bg-gradient-to-br from-slate-50/50 to-indigo-50/5 rounded-2xl relative overflow-hidden shadow-sm">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-6 gap-3 pb-4 border-b border-slate-100">
+                    <div className="space-y-1">
+                      <h4 className="font-display font-bold text-base flex items-center gap-2 text-slate-800">
+                        <CalendarDays size={18} className="text-brand-primary" />
+                        Today's Shift-wise Combine Summary
+                      </h4>
+                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest font-mono">
+                        Bangladesh Stand. Time | Operational Date: <span className="text-brand-primary font-bold">{new Date(currentProductionDateStr).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}</span> (08 AM - 08 AM)
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <div className="text-[10px] font-black uppercase text-slate-400 tracking-wider font-mono">Status:</div>
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[9px] font-black uppercase tracking-wider bg-emerald-50 text-emerald-600 border border-emerald-100 font-mono">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                        Live Synchronized
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    {/* Day Shift Combined Card (08:00 AM to 08:00 PM) */}
+                    <div className="bg-gradient-to-br from-white to-amber-50/10 border border-slate-100 hover:border-amber-100 shadow-sm rounded-xl p-5 relative transition-all duration-300">
+                      <div className="flex items-center justify-between mb-4">
+                        <span className="text-[9px] font-black tracking-widest uppercase text-amber-600 bg-amber-50 border border-amber-105 px-2.5 py-0.5 rounded-lg font-mono">
+                          Day Shift (08:00 AM - 08:00 PM)
+                        </span>
+                        <div className="w-8 h-8 rounded-lg bg-amber-50 text-amber-500 flex items-center justify-center">
+                          <Clock size={16} />
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-3 gap-2 text-center md:text-left">
+                        <div>
+                          <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Output Kgs</p>
+                          <p className="text-xl font-mono font-black text-slate-800">{todayDayTotalKgs.toFixed(1)}k</p>
+                        </div>
+                        <div>
+                          <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Finished Rolls</p>
+                          <p className="text-xl font-mono font-black text-slate-800">{todayDayTotalRolls}</p>
+                        </div>
+                        <div>
+                          <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Scrap Loss</p>
+                          <p className="text-xl font-mono font-black text-rose-500">{todayDayTotalScrap.toFixed(2)}k</p>
+                        </div>
+                      </div>
+                      <div className="mt-4 pt-3 border-t border-slate-100 flex justify-between items-center text-[10px] text-slate-400">
+                        <span>Day shift meterage:</span>
+                        <span className="font-mono font-bold text-slate-700">{todayDayTotalMeter.toLocaleString()} m</span>
+                      </div>
+                    </div>
+
+                    {/* Night Shift Combined Card (08:00 PM to 08:00 AM) */}
+                    <div className="bg-gradient-to-br from-white to-indigo-50/10 border border-slate-100 hover:border-indigo-100 shadow-sm rounded-xl p-5 relative transition-all duration-300">
+                      <div className="flex items-center justify-between mb-4">
+                        <span className="text-[9px] font-black tracking-widest uppercase text-indigo-700 bg-indigo-50 border border-indigo-105 px-2.5 py-0.5 rounded-lg font-mono">
+                          Night Shift (08:00 PM - 08:00 AM)
+                        </span>
+                        <div className="w-8 h-8 rounded-lg bg-indigo-50 text-indigo-500 flex items-center justify-center">
+                          <Clock size={16} />
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-3 gap-2 text-center md:text-left">
+                        <div>
+                          <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Output Kgs</p>
+                          <p className="text-xl font-mono font-black text-slate-800">{todayNightTotalKgs.toFixed(1)}k</p>
+                        </div>
+                        <div>
+                          <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Finished Rolls</p>
+                          <p className="text-xl font-mono font-black text-slate-800">{todayNightTotalRolls}</p>
+                        </div>
+                        <div>
+                          <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Scrap Loss</p>
+                          <p className="text-xl font-mono font-black text-rose-500">{todayNightTotalScrap.toFixed(2)}k</p>
+                        </div>
+                      </div>
+                      <div className="mt-4 pt-3 border-t border-slate-100 flex justify-between items-center text-[10px] text-slate-400">
+                        <span>Night shift meterage:</span>
+                        <span className="font-mono font-bold text-slate-700">{todayNightTotalMeter.toLocaleString()} m</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Combined Day + Night Total Stats */}
+                  <div className="mt-6 bg-white border border-slate-100 rounded-xl p-4 flex flex-col sm:flex-row justify-between items-center gap-4 shadow-sm">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-indigo-500 text-white flex items-center justify-center shadow-md shadow-indigo-200">
+                        <TrendingUp size={20} />
+                      </div>
+                      <div>
+                        <h5 className="text-xs font-black text-slate-800 uppercase tracking-wider">Combined Operational Total</h5>
+                        <p className="text-[10px] font-bold text-slate-400">Sum of Day Shift output and Night Shift output combined</p>
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-6 justify-center">
+                      <div className="text-center sm:text-right">
+                        <span className="text-[9px] font-black text-slate-400 uppercase mr-1">Combine Output</span>
+                        <div className="text-lg font-mono font-black text-slate-900">{todayTotalKgs.toFixed(1)} Kg</div>
+                      </div>
+                      <div className="h-8 w-[1px] bg-slate-100 hidden sm:block" />
+                      <div className="text-center sm:text-right">
+                        <span className="text-[9px] font-black text-slate-400 uppercase mr-1">Combine Rolls</span>
+                        <div className="text-lg font-mono font-black text-slate-900">{todayTotalRolls} Rolls</div>
+                      </div>
+                      <div className="h-8 w-[1px] bg-slate-100 hidden sm:block" />
+                      <div className="text-center sm:text-right">
+                        <span className="text-[9px] font-black text-slate-400 uppercase mr-1">Combine Scrap</span>
+                        <div className="text-lg font-mono font-black text-rose-500">{todayTotalScrap.toFixed(2)} Kg</div>
+                      </div>
+                    </div>
+                  </div>
                 </div>
 
                 {/* Machine Monitoring */}
@@ -974,7 +1190,7 @@ export default function App() {
                             ) : (
                               <>
                                 <TrendingUp size={16} className="group-hover:translate-x-1 group-hover:-translate-y-1 transition-transform" />
-                                Transmit Data
+                                Save Data
                               </>
                             )}
                           </button>
@@ -1119,13 +1335,13 @@ export default function App() {
                     {Object.keys(masterStore).map((key) => (
                       <div key={key} className="glass-panel p-6 space-y-4 hover:shadow-lg transition-all duration-300">
                           <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-                            <h3 className="text-xs font-black text-slate-700 uppercase tracking-widest leading-none">{key.replace(/([A-Z])/g, ' $1').trim()}</h3>
+                            <h3 className="text-xs font-black text-slate-700 uppercase tracking-widest leading-none">{key.replace(/([A-Z])/g, ' $1').toUpperCase().trim()}</h3>
                             <button 
                               onClick={() => {
                                 setModalConfig({ 
                                   isOpen: true, 
                                   type: key, 
-                                  title: `Add ${key.replace(/([A-Z])/g, ' $1').trim()}` 
+                                  title: `Add ${key.replace(/([A-Z])/g, ' $1').replace(/^\w/, c => c.toUpperCase()).trim()}` 
                                 });
                               }}
                               className="p-1 w-6 h-6 flex items-center justify-center rounded-lg bg-brand-primary text-white hover:scale-110 active:scale-95 transition-all shadow-md shadow-brand-primary/20"
@@ -1310,10 +1526,13 @@ export default function App() {
                       <thead>
                         <tr className="border-b border-slate-100 bg-slate-50/50">
                           <th className="px-8 py-5 text-[10px] font-bold text-slate-400 uppercase tracking-widest">MACHINE ID</th>
-                          <th className="px-8 py-5 text-[10px] font-bold text-slate-400 uppercase tracking-widest">SPECIFICATION</th>
                           <th className="px-8 py-5 text-[10px] font-bold text-slate-400 uppercase tracking-widest">TARGET (KG)</th>
                           <th className="px-8 py-5 text-[10px] font-bold text-slate-400 uppercase tracking-widest">CURRENT STATE</th>
-                          <th className="px-8 py-5 text-[10px] font-bold text-slate-400 uppercase tracking-widest">LOGS / REMARKS</th>
+                          <th className="px-8 py-5 text-[10px] font-bold text-slate-400 uppercase tracking-widest">REASON</th>
+                          <th className="px-8 py-5 text-[10px] font-bold text-slate-400 uppercase tracking-widest">NUMBER OF IDLE</th>
+                          <th className="px-8 py-5 text-[10px] font-bold text-slate-400 uppercase tracking-widest">NUMBER OF BREAKDOWN</th>
+                          <th className="px-8 py-5 text-[10px] font-bold text-slate-400 uppercase tracking-widest">IDLE TIME</th>
+                          <th className="px-8 py-5 text-[10px] font-bold text-slate-400 uppercase tracking-widest">BREAKDOWN TIME</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-50">
@@ -1322,9 +1541,6 @@ export default function App() {
                              <td className="px-8 py-5">
                                <p className="font-bold text-slate-900 tracking-tight">{m.id}</p>
                                <p className="text-[10px] text-slate-400 font-mono tracking-tighter">NODE-00{m.id.split('-')[1] || 'X'}</p>
-                             </td>
-                             <td className="px-8 py-5">
-                               <span className="text-[10px] px-2 py-1 bg-slate-50 border border-slate-100 rounded font-mono text-slate-500 font-bold tracking-widest">{m.type}</span>
                              </td>
                              <td className="px-8 py-5">
                                <input 
@@ -1338,7 +1554,7 @@ export default function App() {
                                <div className="relative">
                                  <select 
                                    value={m.status}
-                                   onChange={(e) => updateMachineStatus(m.id, { status: e.target.value as any })}
+                                   onChange={(e) => handleMachineStateChange(m, e.target.value as any)}
                                    className={cn(
                                      "w-44 bg-slate-50 border rounded-xl px-4 py-2 text-[10px] font-bold transition-all appearance-none cursor-pointer tracking-widest shadow-sm",
                                      m.status === 'Running' ? 'border-brand-success/20 text-brand-success' : 
@@ -1353,21 +1569,124 @@ export default function App() {
                                </div>
                              </td>
                              <td className="px-8 py-5">
-                               <input 
-                                 type="text" 
-                                 value={m.reason}
-                                 onChange={(e) => {
-                                   const newReason = e.target.value;
-                                   setMachines(prev => prev.map(mach => mach.id === m.id ? { ...mach, reason: newReason } : mach));
-                                 }}
-                                 onBlur={(e) => updateMachineStatus(m.id, { reason: e.target.value })}
-                                 className={cn(
-                                   "w-full max-w-sm bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-xs transition-all font-medium",
-                                   m.status === 'Running' ? 'opacity-20 cursor-not-allowed' : 'opacity-100 hover:border-slate-300 focus:border-brand-primary/50'
+                               <div className="relative min-w-[200px]">
+                                 <select 
+                                   value={m.reason}
+                                   onChange={(e) => {
+                                     const val = e.target.value;
+                                     setMachines(prev => prev.map(mach => mach.id === m.id ? { ...mach, reason: val } : mach));
+                                     updateMachineStatus(m.id, { reason: val });
+                                   }}
+                                   disabled={m.status === 'Running'}
+                                   className={cn(
+                                     "w-full bg-slate-50 border rounded-xl px-4 py-2 text-xs transition-all appearance-none cursor-pointer font-medium pr-10 shadow-sm",
+                                     m.status === 'Running' 
+                                       ? 'opacity-35 cursor-not-allowed border-slate-200 text-slate-400' 
+                                       : 'opacity-100 hover:border-slate-300 focus:border-brand-primary/50 border-slate-200 text-slate-700'
+                                   )}
+                                 >
+                                   {m.status === 'Running' ? (
+                                     <option value="NO_ALERTS">NO_ALERTS</option>
+                                   ) : m.status === 'Idle' ? (
+                                     <>
+                                       {m.reason && masterStore.idleReasons && !masterStore.idleReasons.includes(m.reason) && (
+                                         <option value={m.reason}>{m.reason}</option>
+                                       )}
+                                       {(masterStore.idleReasons || []).map((reasonOpt: string) => (
+                                         <option key={reasonOpt} value={reasonOpt}>{reasonOpt}</option>
+                                       ))}
+                                     </>
+                                   ) : (
+                                     <>
+                                       {m.reason && masterStore.breakdownReasons && !masterStore.breakdownReasons.includes(m.reason) && (
+                                         <option value={m.reason}>{m.reason}</option>
+                                       )}
+                                       {(masterStore.breakdownReasons || []).map((reasonOpt: string) => (
+                                         <option key={reasonOpt} value={reasonOpt}>{reasonOpt}</option>
+                                       ))}
+                                     </>
+                                   )}
+                                 </select>
+                                 {m.status !== 'Running' && (
+                                   <ChevronDown size={14} className="absolute right-4 top-1/2 -translate-y-1/2 opacity-30" />
                                  )}
-                                 placeholder={m.status === 'Running' ? "NO_ALERTS" : "Specify reason for state change..."}
-                                 disabled={m.status === 'Running'}
+                               </div>
+                             </td>
+                             <td className="px-8 py-5">
+                               <input 
+                                 type="number" 
+                                 value={m.numIdle ?? 0}
+                                 onChange={(e) => {
+                                   const val = Number(e.target.value) || 0;
+                                   setMachines(prev => prev.map(mach => mach.id === m.id ? { ...mach, numIdle: val } : mach));
+                                 }}
+                                 onBlur={(e) => updateMachineStatus(m.id, { numIdle: Number(e.target.value) || 0 })}
+                                 className="w-24 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-center font-mono text-slate-700 focus:outline-none focus:ring-2 focus:ring-brand-primary/20"
                                />
+                             </td>
+                             <td className="px-8 py-5">
+                               <input 
+                                 type="number" 
+                                 value={m.numBreakdown ?? 0}
+                                 onChange={(e) => {
+                                   const val = Number(e.target.value) || 0;
+                                   setMachines(prev => prev.map(mach => mach.id === m.id ? { ...mach, numBreakdown: val } : mach));
+                                 }}
+                                 onBlur={(e) => updateMachineStatus(m.id, { numBreakdown: Number(e.target.value) || 0 })}
+                                 className="w-24 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-center font-mono text-slate-700 focus:outline-none focus:ring-2 focus:ring-brand-primary/20"
+                               />
+                             </td>
+                             <td className="px-8 py-5">
+                               {(() => {
+                                 let displayingTime = m.idleTime ?? 0;
+                                 let isActive = false;
+                                 if (m.status === 'Idle' && m.lastStatusChange) {
+                                   isActive = true;
+                                   const elapsedMs = Date.now() - new Date(m.lastStatusChange).getTime();
+                                   const elapsedHours = elapsedMs / (1000 * 60 * 60);
+                                   displayingTime += elapsedHours;
+                                 }
+                                 return (
+                                   <div className="flex items-center gap-1.5">
+                                     <div className={cn(
+                                       "px-3 py-1.5 rounded-xl font-mono text-xs font-bold transition-all flex items-center gap-1 w-24 justify-center border",
+                                       isActive 
+                                         ? "bg-amber-50 text-amber-600 border-amber-200 ring-2 ring-amber-100/50" 
+                                         : "bg-slate-50 text-slate-600 border-slate-200/80"
+                                     )}>
+                                       {isActive && <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />}
+                                       <span>{displayingTime.toFixed(3)}</span>
+                                     </div>
+                                     <span className="text-[10px] text-slate-400 font-bold uppercase font-mono">hrs</span>
+                                   </div>
+                                 );
+                               })()}
+                             </td>
+                             <td className="px-8 py-5">
+                               {(() => {
+                                 let displayingTime = m.breakdownTime ?? 0;
+                                 let isActive = false;
+                                 if (m.status === 'Breakdown' && m.lastStatusChange) {
+                                   isActive = true;
+                                   const elapsedMs = Date.now() - new Date(m.lastStatusChange).getTime();
+                                   const elapsedHours = elapsedMs / (1000 * 60 * 60);
+                                   displayingTime += elapsedHours;
+                                 }
+                                 return (
+                                   <div className="flex items-center gap-1.5">
+                                     <div className={cn(
+                                       "px-3 py-1.5 rounded-xl font-mono text-xs font-bold transition-all flex items-center gap-1 w-24 justify-center border",
+                                       isActive 
+                                         ? "bg-rose-50 text-rose-600 border-rose-200 ring-2 ring-rose-100/50" 
+                                         : "bg-slate-50 text-slate-600 border-slate-200/80"
+                                     )}>
+                                       {isActive && <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse" />}
+                                       <span>{displayingTime.toFixed(3)}</span>
+                                     </div>
+                                     <span className="text-[10px] text-slate-400 font-bold uppercase font-mono">hrs</span>
+                                   </div>
+                                 );
+                               })()}
                              </td>
                            </tr>
                         ))}

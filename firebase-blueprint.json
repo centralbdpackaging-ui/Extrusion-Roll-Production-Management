@@ -29,7 +29,9 @@
         "uoms": { "type": "array" },
         "materials": { "type": "array" },
         "inlinePrintOptions": { "type": "array" },
-        "years": { "type": "array" }
+        "years": { "type": "array" },
+        "breakdownReasons": { "type": "array" },
+        "idleReasons": { "type": "array" }
       }
     },
     "Machine": {
@@ -41,7 +43,12 @@
         "type": { "type": "string" },
         "target": { "type": "number" },
         "status": { "type": "string" },
-        "reason": { "type": "string" }
+        "reason": { "type": "string" },
+        "numIdle": { "type": "number" },
+        "numBreakdown": { "type": "number" },
+        "idleTime": { "type": "number" },
+        "breakdownTime": { "type": "number" },
+        "lastStatusChange": { "type": "string" }
       }
     },
     "Operator": {
