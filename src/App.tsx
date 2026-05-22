@@ -807,29 +807,29 @@ export default function App() {
 
                       {/* Main Form Body */}
                       <div className="grid grid-cols-1 md:grid-cols-3 gap-x-8 gap-y-4">
-                        <SelectField label="Production Type" name="ProductionType" value={formData.ProductionType} onChange={handleInputChange} options={masterStore.productionTypes} icon={<Package size={14} />} placeholder="Select..." clearable={false} />
+                        <SelectField label="Production Type" name="ProductionType" value={formData.ProductionType} onChange={handleInputChange} options={masterStore.productionTypes} icon={<Package size={14} />} placeholder="Type Here" clearable={false} />
                         <div className="relative">
-                          <InputField label="Operator ID" name="OperatorID" type="number" value={formData.OperatorID} onChange={handleInputChange} icon={<Hash size={14} />} placeholder="100" required />
+                          <InputField label="Operator ID" name="OperatorID" type="number" value={formData.OperatorID} onChange={handleInputChange} icon={<Hash size={14} />} placeholder="Type Here" required />
                           <div className="hidden">
                             <InputField label="Operator Name" name="OperatorName" value={formData.OperatorName} onChange={handleInputChange} icon={<UserIcon size={14} />} placeholder="Name" />
                           </div>
                         </div>
-                        <SelectField label="Machine No" name="MachineNo" value={formData.MachineNo} onChange={handleInputChange} options={machines.map(m => m.id)} icon={<Container size={14} />} placeholder="Select..." />
+                        <SelectField label="Machine No" name="MachineNo" value={formData.MachineNo} onChange={handleInputChange} options={machines.map(m => m.id)} icon={<Container size={14} />} placeholder="Type Here" />
                         
-                        <SelectField label="Year" name="Year" value={formData.Year} onChange={handleInputChange} options={masterStore.years} icon={<CalendarIcon size={14} />} placeholder="Select..." clearable={false} />
-                        <InputField label="PI Number" name="PINumber" type="number" value={formData.PINumber} onChange={handleInputChange} icon={<Hash size={14} />} placeholder="#0000" />
-                        <InputField label="Tube Size" name="TubeSize" type="number" step="0.01" value={formData.TubeSize} onChange={handleInputChange} icon={<Ruler size={14} />} placeholder="450" />
+                        <SelectField label="Year" name="Year" value={formData.Year} onChange={handleInputChange} options={masterStore.years} icon={<CalendarIcon size={14} />} placeholder="Type Here" clearable={false} />
+                        <InputField label="PI Number" name="PINumber" type="number" value={formData.PINumber} onChange={handleInputChange} icon={<Hash size={14} />} placeholder="Type Here" />
+                        <InputField label="Tube Size" name="TubeSize" type="number" step="0.01" value={formData.TubeSize} onChange={handleInputChange} icon={<Ruler size={14} />} placeholder="Type Here" />
                         
-                        <SelectField label="UOM" name="UOM" value={formData.UOM} onChange={handleInputChange} options={masterStore.uoms} icon={<Ruler size={14} />} placeholder="Select..." />
-                        <SelectField label="Raw Material" name="Material" value={formData.Material} onChange={handleInputChange} options={masterStore.materials} icon={<Layers size={14} />} placeholder="Select..." />
-                        <InputField label="Micron" name="Micron" type="number" value={formData.Micron} onChange={handleInputChange} icon={<Box size={14} />} placeholder="30" />
+                        <SelectField label="UOM" name="UOM" value={formData.UOM} onChange={handleInputChange} options={masterStore.uoms} icon={<Ruler size={14} />} placeholder="Type Here" />
+                        <SelectField label="Raw Material" name="Material" value={formData.Material} onChange={handleInputChange} options={masterStore.materials} icon={<Layers size={14} />} placeholder="Type Here" />
+                        <InputField label="Micron" name="Micron" type="number" value={formData.Micron} onChange={handleInputChange} icon={<Box size={14} />} placeholder="Type Here" />
                         
-                        <SelectField label="In-Line Print" name="InLinePrint" value={formData.InLinePrint} onChange={handleInputChange} options={masterStore.inlinePrintOptions} icon={<CheckCircle2 size={14} />} placeholder="Select..." />
-                        <InputField label="Finished Meter" name="FinishedMeter" type="number" value={formData.FinishedMeter} onChange={handleInputChange} icon={<Ruler size={14} />} placeholder="0" />
-                        <InputField label="Finished KG" name="FinishedKgs" type="number" step="0.01" value={formData.FinishedKgs} onChange={handleInputChange} icon={<Weight size={14} />} placeholder="0.00" required />
+                        <SelectField label="In-Line Print" name="InLinePrint" value={formData.InLinePrint} onChange={handleInputChange} options={masterStore.inlinePrintOptions} icon={<CheckCircle2 size={14} />} placeholder="Type Here" />
+                        <InputField label="Finished Meter" name="FinishedMeter" type="number" value={formData.FinishedMeter} onChange={handleInputChange} icon={<Ruler size={14} />} placeholder="Type Here" />
+                        <InputField label="Finished KG" name="FinishedKgs" type="number" step="0.01" value={formData.FinishedKgs} onChange={handleInputChange} icon={<Weight size={14} />} placeholder="Type Here" required />
                         
-                        <InputField label="Waste (KG)" name="ScrapKgs" type="number" step="0.01" value={formData.ScrapKgs} onChange={handleInputChange} icon={<AlertTriangle size={14} />} placeholder="0.00" />
-                        <InputField label="Roll Location" name="RollLocation" value={formData.RollLocation} onChange={handleInputChange} icon={<MapPin size={14} />} placeholder="G-1" />
+                        <InputField label="Waste (KG)" name="ScrapKgs" type="number" step="0.01" value={formData.ScrapKgs} onChange={handleInputChange} icon={<AlertTriangle size={14} />} placeholder="Type Here" />
+                        <InputField label="Roll Location" name="RollLocation" value={formData.RollLocation} onChange={handleInputChange} icon={<MapPin size={14} />} placeholder="Type Here" />
                         <div />
                       </div>
 
@@ -1828,6 +1828,7 @@ function InputField({ label, name, icon, ...props }: any) {
 function SelectField({ label, name, icon, options = [], placeholder, value, onChange, clearable = true, ...props }: any) {
   const [isOpen, setIsOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [focusedIndex, setFocusedIndex] = useState(0);
   const dropdownRef = React.useRef<HTMLDivElement>(null);
 
   // Close dropdown on click outside
@@ -1852,6 +1853,11 @@ function SelectField({ label, name, icon, options = [], placeholder, value, onCh
     opt ? opt.toLowerCase().includes(searchQuery.toLowerCase()) : false
   );
 
+  // Reset focused index when query or filtered options change
+  useEffect(() => {
+    setFocusedIndex(0);
+  }, [searchQuery, isOpen, options]);
+
   const handleSelect = (opt: string) => {
     if (onChange) {
       onChange({ target: { name, value: opt } });
@@ -1869,6 +1875,42 @@ function SelectField({ label, name, icon, options = [], placeholder, value, onCh
     setIsOpen(false);
   };
 
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (!isOpen) {
+      if (e.key === 'ArrowDown' || e.key === 'Enter') {
+        setIsOpen(true);
+        setFocusedIndex(0);
+        e.preventDefault();
+      }
+      return;
+    }
+
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setFocusedIndex((prev) => {
+        if (filteredOptions.length === 0) return -1;
+        const nextIndex = prev + 1;
+        return nextIndex < filteredOptions.length ? nextIndex : 0;
+      });
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setFocusedIndex((prev) => {
+        if (filteredOptions.length === 0) return -1;
+        const nextIndex = prev - 1;
+        return nextIndex >= 0 ? nextIndex : filteredOptions.length - 1;
+      });
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (filteredOptions.length > 0) {
+        const indexToSelect = (focusedIndex >= 0 && focusedIndex < filteredOptions.length) ? focusedIndex : 0;
+        handleSelect(filteredOptions[indexToSelect]);
+      }
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      setIsOpen(false);
+    }
+  };
+
   return (
     <div className="space-y-1 relative" ref={dropdownRef}>
       <label className="text-[9px] font-bold text-slate-400 uppercase tracking-widest flex items-center gap-1.5 ml-1">
@@ -1878,7 +1920,7 @@ function SelectField({ label, name, icon, options = [], placeholder, value, onCh
       <div className="relative">
         <input
           type="text"
-          placeholder={placeholder || "Select..."}
+          placeholder={placeholder || "Type Here"}
           value={isOpen ? searchQuery : (value || '')}
           onChange={(e) => {
             setSearchQuery(e.target.value);
@@ -1888,6 +1930,7 @@ function SelectField({ label, name, icon, options = [], placeholder, value, onCh
             setIsOpen(true);
             setSearchQuery('');
           }}
+          onKeyDown={handleKeyDown}
           className="w-full bg-slate-50 border border-slate-200 rounded-lg pl-3 pr-10 py-1.5 text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-4 focus:ring-brand-primary/5 focus:border-brand-primary/30 transition-all font-medium h-[34px] cursor-text"
         />
         
@@ -1919,18 +1962,21 @@ function SelectField({ label, name, icon, options = [], placeholder, value, onCh
             {/* Options List */}
             <div className="overflow-y-auto py-1 max-h-48 divide-y divide-slate-50">
               {filteredOptions.length === 0 ? (
-                <div className="px-3 py-2 text-xs text-slate-400 text-center italic">
+                <div className="px-3 py-2 text-xs text-slate-400 text-center italic font-semibold">
                   No options found
                 </div>
               ) : (
-                filteredOptions.map((opt: string) => (
+                filteredOptions.map((opt: string, index: number) => (
                   <button
                     key={opt}
                     type="button"
                     onClick={() => handleSelect(opt)}
+                    onMouseEnter={() => setFocusedIndex(index)}
                     className={cn(
-                      "w-full text-left px-3 py-2 text-xs font-semibold transition-colors hover:bg-slate-50 cursor-pointer block truncate",
-                      value === opt ? "bg-brand-primary/5 text-brand-primary font-black animate-pulse" : "text-slate-700"
+                      "w-full text-left px-3 py-2 text-xs font-semibold transition-colors cursor-pointer block truncate",
+                      focusedIndex === index 
+                        ? "bg-brand-primary/5 text-brand-primary font-bold" 
+                        : (value === opt ? "bg-slate-50 text-brand-primary font-black" : "text-slate-700")
                     )}
                   >
                     {opt}
