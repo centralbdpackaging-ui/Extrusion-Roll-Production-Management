@@ -116,10 +116,10 @@ export default function App() {
   const [formData, setFormData] = useState<ProductionEntry>({
     ProductionDate: formatDate(new Date()),
     Shift: 'A',
-    ProductionType: 'Commercial',
+    ProductionType: '',
     OperatorID: '',
     MachineNo: '',
-    Year: new Date().getFullYear().toString(),
+    Year: '',
     PINumber: '',
     TubeSize: '',
     UOM: '',
@@ -424,15 +424,15 @@ export default function App() {
         fetchRecentEntries();
         fetchNextRollId();
         fetchPreviousRollId();
-        // Clear the entire form on successful data transmission, keeping defaults like current year
+        // Clear the entire form on successful data transmission
         setFormData({
           ProductionDate: formatDate(new Date()),
           Shift: 'A',
-          ProductionType: 'Commercial',
+          ProductionType: '',
           OperatorID: '',
           OperatorName: '',
           MachineNo: '',
-          Year: new Date().getFullYear().toString(),
+          Year: '',
           PINumber: '',
           TubeSize: '',
           UOM: '',
@@ -477,6 +477,12 @@ export default function App() {
             onClick={() => setActiveTab('dashboard')} 
           />
           <SidebarLink 
+            icon={<Layers size={18} />} 
+            label="TARGET & MACHINES" 
+            active={activeTab === 'machines'}
+            onClick={() => setActiveTab('machines')}
+          />
+          <SidebarLink 
             icon={<PlusCircle size={18} />} 
             label="ENTRY PORTAL" 
             active={activeTab === 'entry'} 
@@ -490,12 +496,6 @@ export default function App() {
           />
           <div className="pt-6 pb-2">
             <p className="px-4 text-[9px] font-bold text-slate-400 uppercase tracking-[0.2em] mb-2">MASTER DATA</p>
-            <SidebarLink 
-              icon={<Layers size={18} />} 
-              label="MACHINES" 
-              active={activeTab === 'machines'}
-              onClick={() => setActiveTab('machines')}
-            />
             <SidebarLink 
               icon={<Settings size={18} />} 
               label="MASTER TABLES" 
@@ -562,10 +562,11 @@ export default function App() {
           <div className="flex items-center gap-5">
             <h2 className="font-display font-black text-xl tracking-tight text-slate-900 uppercase">
               {activeTab === 'dashboard' ? 'Real-Time Operations' : 
+               activeTab === 'machines' ? 'Target & Machines' : 
                activeTab === 'entry' ? 'Production Entry' : 
                activeTab === 'history' ? 'Operation Logs' : 
                activeTab === 'master-config' ? 'Master Data Table' : 
-               activeTab === 'operators' ? 'Operator Management' : 'Asset Registry'}
+               activeTab === 'operators' ? 'Operator Management' : 'Target & Machines'}
             </h2>
             <div className="flex items-center gap-2 px-2 py-0.5 rounded bg-emerald-50 border border-emerald-100">
                <Database size={10} className="text-emerald-500" />
@@ -806,7 +807,7 @@ export default function App() {
 
                       {/* Main Form Body */}
                       <div className="grid grid-cols-1 md:grid-cols-3 gap-x-8 gap-y-4">
-                        <SelectField label="Production Type" name="ProductionType" value={formData.ProductionType} onChange={handleInputChange} options={masterStore.productionTypes} icon={<Package size={14} />} />
+                        <SelectField label="Production Type" name="ProductionType" value={formData.ProductionType} onChange={handleInputChange} options={masterStore.productionTypes} icon={<Package size={14} />} placeholder="Select..." clearable={false} />
                         <div className="relative">
                           <InputField label="Operator ID" name="OperatorID" type="number" value={formData.OperatorID} onChange={handleInputChange} icon={<Hash size={14} />} placeholder="100" required />
                           <div className="hidden">
@@ -815,7 +816,7 @@ export default function App() {
                         </div>
                         <SelectField label="Machine No" name="MachineNo" value={formData.MachineNo} onChange={handleInputChange} options={machines.map(m => m.id)} icon={<Container size={14} />} placeholder="Select..." />
                         
-                        <SelectField label="Year" name="Year" value={formData.Year} onChange={handleInputChange} options={masterStore.years} icon={<CalendarIcon size={14} />} />
+                        <SelectField label="Year" name="Year" value={formData.Year} onChange={handleInputChange} options={masterStore.years} icon={<CalendarIcon size={14} />} placeholder="Select..." clearable={false} />
                         <InputField label="PI Number" name="PINumber" type="number" value={formData.PINumber} onChange={handleInputChange} icon={<Hash size={14} />} placeholder="#0000" />
                         <InputField label="Tube Size" name="TubeSize" type="number" step="0.01" value={formData.TubeSize} onChange={handleInputChange} icon={<Ruler size={14} />} placeholder="450" />
                         
@@ -1824,7 +1825,7 @@ function InputField({ label, name, icon, ...props }: any) {
   );
 }
 
-function SelectField({ label, name, icon, options = [], placeholder, value, onChange, ...props }: any) {
+function SelectField({ label, name, icon, options = [], placeholder, value, onChange, clearable = true, ...props }: any) {
   const [isOpen, setIsOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const dropdownRef = React.useRef<HTMLDivElement>(null);
@@ -1891,7 +1892,7 @@ function SelectField({ label, name, icon, options = [], placeholder, value, onCh
         />
         
         <div className="absolute right-2.5 top-1/2 -translate-y-1/2 flex items-center gap-1 text-slate-400">
-          {value && (
+          {clearable && value && (
             <button
               type="button"
               onClick={handleClear}
