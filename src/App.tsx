@@ -773,24 +773,50 @@ export default function App() {
                         {/* Moved Inputs: Production Date and Shift */}
                         <div className="flex flex-wrap items-center gap-4 bg-slate-50/50 p-3 rounded-xl border border-slate-100">
                           <div className="min-w-[160px]">
-                            <label className="block text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-1 ml-1">PRODUCTION DATE</label>
+                            <label className="block text-[9px] font-black text-brand-primary uppercase tracking-widest mb-1 ml-1">PRODUCTION DATE</label>
                             <div className="relative">
                               <input 
                                 type="date" 
                                 name="ProductionDate"
                                 value={formData.ProductionDate}
                                 onChange={handleInputChange}
-                                className="w-full bg-white border border-slate-200 rounded-lg px-3 py-1.5 text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-brand-primary/20 transition-all"
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') {
+                                    e.preventDefault();
+                                    const form = e.currentTarget.closest('form');
+                                    if (form) {
+                                      const focusable = Array.from(form.querySelectorAll('input:not([type="hidden"]), select')) as HTMLElement[];
+                                      const index = focusable.indexOf(e.currentTarget);
+                                      if (index > -1 && index < focusable.length - 1) {
+                                        focusable[index + 1].focus();
+                                      }
+                                    }
+                                  }
+                                }}
+                                className="w-full bg-white border border-slate-200 rounded-lg px-3 py-1.5 text-xs font-bold text-slate-900 focus:outline-none focus:ring-4 focus:ring-brand-primary/10 focus:border-brand-primary/50 focus:bg-blue-50/20 focus:scale-[1.01] transition-all"
                               />
                             </div>
                           </div>
                           <div className="min-w-[100px]">
-                            <label className="block text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-1 ml-1">SHIFT</label>
+                            <label className="block text-[9px] font-black text-brand-primary uppercase tracking-widest mb-1 ml-1">SHIFT</label>
                             <select 
                               name="Shift"
                               value={formData.Shift}
                               onChange={handleInputChange}
-                              className="w-full bg-white border border-slate-200 rounded-lg px-3 py-1.5 text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-brand-primary/20 transition-all appearance-none"
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                  e.preventDefault();
+                                  const form = e.currentTarget.closest('form');
+                                  if (form) {
+                                    const focusable = Array.from(form.querySelectorAll('input:not([type="hidden"]), select')) as HTMLElement[];
+                                    const index = focusable.indexOf(e.currentTarget);
+                                    if (index > -1 && index < focusable.length - 1) {
+                                      focusable[index + 1].focus();
+                                    }
+                                  }
+                                }
+                              }}
+                              className="w-full bg-white border border-slate-200 rounded-lg px-3 py-1.5 text-xs font-bold text-slate-900 focus:outline-none focus:ring-4 focus:ring-brand-primary/10 focus:border-brand-primary/50 focus:bg-blue-50/20 focus:scale-[1.01] transition-all appearance-none"
                             >
                               {masterStore.shifts.map((s: string) => <option key={s} value={s}>{s}</option>)}
                             </select>
@@ -1810,16 +1836,38 @@ function StatusLegend({ color, label }: { color: string, label: string }) {
 }
 
 function InputField({ label, name, icon, ...props }: any) {
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      const currentInput = e.currentTarget;
+      const form = currentInput.closest('form');
+      if (form) {
+        const focusable = Array.from(
+          form.querySelectorAll('input:not([type="hidden"]), select')
+        ) as HTMLElement[];
+        const index = focusable.indexOf(currentInput);
+        if (index > -1 && index < focusable.length - 1) {
+          const nextElement = focusable[index + 1];
+          nextElement.focus();
+          if (nextElement instanceof HTMLInputElement && nextElement.type !== 'date') {
+            nextElement.select();
+          }
+        }
+      }
+    }
+  };
+
   return (
     <div className="space-y-1">
-      <label className="text-[9px] font-bold text-slate-400 uppercase tracking-widest flex items-center gap-1.5 ml-1">
+      <label className="text-[9px] font-black text-brand-primary uppercase tracking-widest flex items-center gap-1.5 ml-1">
         {icon}
         {label}
       </label>
       <input 
         name={name}
+        onKeyDown={handleKeyDown}
         {...props}
-        className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 text-xs text-slate-900 placeholder:text-slate-200 focus:outline-none focus:ring-4 focus:ring-brand-primary/5 focus:border-brand-primary/30 transition-all font-medium"
+        className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 text-xs text-slate-900 placeholder:text-slate-200 focus:outline-none focus:ring-4 focus:ring-brand-primary/10 focus:border-brand-primary/50 focus:bg-blue-50/20 focus:scale-[1.01] transition-all font-medium h-[34px]"
       />
     </div>
   );
@@ -1877,10 +1925,27 @@ function SelectField({ label, name, icon, options = [], placeholder, value, onCh
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (!isOpen) {
-      if (e.key === 'ArrowDown' || e.key === 'Enter') {
+      if (e.key === 'ArrowDown') {
         setIsOpen(true);
         setFocusedIndex(0);
         e.preventDefault();
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        const currentInput = e.currentTarget;
+        const form = currentInput.closest('form');
+        if (form) {
+          const focusable = Array.from(
+            form.querySelectorAll('input:not([type="hidden"]), select')
+          ) as HTMLElement[];
+          const index = focusable.indexOf(currentInput);
+          if (index > -1 && index < focusable.length - 1) {
+            const nextElement = focusable[index + 1];
+            nextElement.focus();
+            if (nextElement instanceof HTMLInputElement && nextElement.type !== 'date') {
+              nextElement.select();
+            }
+          }
+        }
       }
       return;
     }
@@ -1903,7 +1968,33 @@ function SelectField({ label, name, icon, options = [], placeholder, value, onCh
       e.preventDefault();
       if (filteredOptions.length > 0) {
         const indexToSelect = (focusedIndex >= 0 && focusedIndex < filteredOptions.length) ? focusedIndex : 0;
-        handleSelect(filteredOptions[indexToSelect]);
+        const selectedValue = filteredOptions[indexToSelect];
+        handleSelect(selectedValue);
+        
+        // Auto-navigate to next field
+        setTimeout(() => {
+          if (dropdownRef.current) {
+            const currentInput = dropdownRef.current.querySelector('input');
+            if (currentInput) {
+              const form = currentInput.closest('form');
+              if (form) {
+                const focusable = Array.from(
+                  form.querySelectorAll('input:not([type="hidden"]), select')
+                ) as HTMLElement[];
+                const index = focusable.indexOf(currentInput);
+                if (index > -1 && index < focusable.length - 1) {
+                  const nextElement = focusable[index + 1];
+                  nextElement.focus();
+                  if (nextElement instanceof HTMLInputElement && nextElement.type !== 'date') {
+                    nextElement.select();
+                  }
+                }
+              }
+            }
+          }
+        }, 50);
+      } else {
+        setIsOpen(false);
       }
     } else if (e.key === 'Escape') {
       e.preventDefault();
@@ -1913,7 +2004,7 @@ function SelectField({ label, name, icon, options = [], placeholder, value, onCh
 
   return (
     <div className="space-y-1 relative" ref={dropdownRef}>
-      <label className="text-[9px] font-bold text-slate-400 uppercase tracking-widest flex items-center gap-1.5 ml-1">
+      <label className="text-[9px] font-black text-brand-primary uppercase tracking-widest flex items-center gap-1.5 ml-1">
         {icon}
         {label}
       </label>
@@ -1931,7 +2022,7 @@ function SelectField({ label, name, icon, options = [], placeholder, value, onCh
             setSearchQuery('');
           }}
           onKeyDown={handleKeyDown}
-          className="w-full bg-slate-50 border border-slate-200 rounded-lg pl-3 pr-10 py-1.5 text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-4 focus:ring-brand-primary/5 focus:border-brand-primary/30 transition-all font-medium h-[34px] cursor-text"
+          className="w-full bg-slate-50 border border-slate-200 rounded-lg pl-3 pr-10 py-1.5 text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-4 focus:ring-brand-primary/10 focus:border-brand-primary/50 focus:bg-blue-50/20 focus:scale-[1.01] transition-all font-medium h-[34px] cursor-text"
         />
         
         <div className="absolute right-2.5 top-1/2 -translate-y-1/2 flex items-center gap-1 text-slate-400">
