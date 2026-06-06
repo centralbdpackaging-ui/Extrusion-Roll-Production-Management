@@ -8,6 +8,7 @@ import {
   PlusCircle, 
   History,
   AlertCircle,
+  Menu,
   Clock,
   TrendingUp,
   Package,
@@ -148,6 +149,7 @@ const formatMachineDuration = (hoursNum: number): string => {
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<'entry' | 'dashboard' | 'history' | 'machines' | 'master-config' | 'operators' | 'master-production-record' | 'breakdown-data'>('dashboard');
+  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [dashboardDateFilter, setDashboardDateFilter] = useState<string>('');
   
   // Calculate Bangladesh shift and operational production date
@@ -770,7 +772,10 @@ export default function App() {
   return (
     <div className="min-h-screen flex text-slate-800 industrial-grid">
       {/* Sidebar */}
-      <aside className="w-64 bg-white border-r border-brand-border flex flex-col z-20 overflow-hidden sticky top-0 h-screen sidebar-glow">
+      <aside className={cn(
+        "bg-white border-r border-brand-border flex flex-col z-50 overflow-hidden sticky top-0 h-screen sidebar-glow transition-all duration-300",
+        isSidebarOpen ? "w-64" : "w-0 border-r-0"
+      )}>
         <div className="p-6 border-b border-brand-border flex items-center gap-3">
           <div className="w-10 h-10 bg-brand-primary rounded-lg flex items-center justify-center shadow-lg shadow-brand-primary/20 relative">
             <Factory className="text-white" size={20} />
@@ -876,8 +881,15 @@ export default function App() {
 
       {/* Main Content */}
       <main className="flex-1 flex flex-col relative min-w-0">
-        <header className="h-16 bg-white/90 backdrop-blur-md border-b border-brand-border flex items-center justify-between px-8 sticky top-0 z-10 shadow-sm shadow-slate-100/50">
+        <header className="h-16 bg-white/90 backdrop-blur-md border-b border-brand-border flex items-center justify-between px-8 sticky top-0 z-40 shadow-sm shadow-slate-100/50">
           <div className="flex items-center gap-5">
+            <button 
+              onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+              onMouseEnter={() => setIsSidebarOpen(true)}
+              className="p-2 -ml-2 text-slate-500 hover:bg-slate-100 hover:text-slate-800 rounded-lg transition-colors"
+            >
+              <Menu size={20} />
+            </button>
             <h2 className="font-display font-black text-xl tracking-tight text-slate-900 uppercase">
               {activeTab === 'dashboard' ? 'Real-Time Operations' : 
                activeTab === 'machines' ? 'Target & Machines' : 
