@@ -75,14 +75,20 @@ interface ProductionEntry {
 }
 
 interface MachineSummary {
+  Date: string;
   MachineNo: string;
   TargetKgs: number;
   TotalRolls: number;
   TotalMeter: number;
   TotalProductionKgs: number;
-  Status: 'Running' | 'Idle' | 'Breakdown';
-  Reason?: string;
-  LastUpdate: string;
+  MachineStatus: 'Running' | 'Idle' | 'Breakdown' | string;
+  BreakdownType: string;
+  ReasonOfIdle: string;
+  LastUpdateTime: string;
+  BreakdownNoOfTimes: number;
+  BreakdownDurationMins: number;
+  IdleNoOfTimes: number;
+  IdleDurationMins: number;
 }
 
 interface MachineMaster {
@@ -1119,6 +1125,69 @@ export default function App() {
                     {dashboardData?.summary.map((machine) => (
                       <MachineCard key={machine.MachineNo} machine={machine} />
                     ))}
+                  </div>
+
+                  {/* Dashboard Table */}
+                  <div className="hidden bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden mt-8">
+                    <div className="px-6 py-5 border-b border-slate-200 bg-slate-50/50">
+                      <h3 className="text-sm font-bold text-slate-800 uppercase tracking-wider">Dashboard Table</h3>
+                    </div>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left border-collapse min-w-[1200px]">
+                        <thead>
+                          <tr className="text-[10px] uppercase tracking-wider text-center border-b-2 border-slate-800">
+                            <th className="px-3 py-3 border-r border-slate-300 bg-red-600 text-white font-bold w-24">Date</th>
+                            <th className="px-3 py-3 border-r border-slate-300 bg-red-600 text-white font-bold w-24">Machine No</th>
+                            <th className="px-3 py-3 border-r border-amber-500/30 bg-amber-200 text-amber-900 font-bold">Target Kgs</th>
+                            <th className="px-3 py-3 border-r border-amber-500/30 bg-amber-200 text-amber-900 font-bold">Total Rolls</th>
+                            <th className="px-3 py-3 border-r border-amber-500/30 bg-amber-200 text-amber-900 font-bold">Total Meter</th>
+                            <th className="px-3 py-3 border-r border-amber-500/30 bg-amber-200 text-amber-900 font-bold">Total<br/>Production Kgs</th>
+                            <th className="px-3 py-3 border-r border-amber-500/30 bg-amber-200 text-amber-900 font-bold">Machine Status</th>
+                            <th className="px-3 py-3 border-r border-amber-500/30 bg-amber-200 text-amber-900 font-bold">Breakdown Type</th>
+                            <th className="px-3 py-3 border-r border-slate-300 bg-amber-200 text-amber-900 font-bold">Reason of Idle</th>
+                            <th className="px-3 py-3 border-r border-slate-300 bg-red-600 text-white font-bold">Last Update Time</th>
+                            <th className="px-3 py-3 border-r border-slate-300 bg-red-600 text-white font-bold">Breakdown No of<br/>Times</th>
+                            <th className="px-3 py-3 bg-red-600 text-white font-bold">Breakdown<br/>Duration (Mins)</th>
+                          </tr>
+                        </thead>
+                        <tbody className="text-xs text-slate-700 text-center font-medium">
+                          {dashboardData?.summary.map((row, idx) => (
+                            <tr key={idx} className="border-b border-slate-200 hover:bg-slate-50 transition-colors">
+                              <td className="px-3 py-2.5 border-r border-slate-200 bg-white">
+                                {row.Date ? new Date(row.Date).toLocaleDateString('en-GB') : '-'}
+                              </td>
+                              <td className="px-3 py-2.5 border-r border-slate-200 bg-white font-bold text-slate-900">{row.MachineNo}</td>
+                              <td className="px-3 py-2.5 border-r border-amber-100 bg-amber-50/30">{row.TargetKgs}</td>
+                              <td className="px-3 py-2.5 border-r border-amber-100 bg-amber-50/30">{row.TotalRolls}</td>
+                              <td className="px-3 py-2.5 border-r border-amber-100 bg-amber-50/30">{row.TotalMeter}</td>
+                              <td className="px-3 py-2.5 border-r border-amber-100 bg-amber-50/30">
+                                {row.TotalProductionKgs > 0 ? row.TotalProductionKgs.toFixed(1) : '0'}
+                              </td>
+                              <td className="px-3 py-2.5 border-r border-amber-100 bg-amber-50/30">
+                                <span className={`px-2 py-0.5 rounded text-[10px] uppercase font-bold tracking-wider ${
+                                  row.MachineStatus === 'Running' ? 'bg-emerald-100 text-emerald-700' :
+                                  row.MachineStatus === 'Breakdown' ? 'bg-red-100 text-red-700' :
+                                  'bg-amber-100 text-amber-700'
+                                }`}>
+                                  {row.MachineStatus}
+                                </span>
+                              </td>
+                              <td className="px-3 py-2.5 border-r border-amber-100 bg-amber-50/30 text-[10px]">
+                                {row.BreakdownType || '-'}
+                              </td>
+                              <td className="px-3 py-2.5 border-r border-slate-200 bg-amber-50/30 text-[10px]">
+                                {row.ReasonOfIdle || '-'}
+                              </td>
+                              <td className="px-3 py-2.5 border-r border-slate-200 bg-white">
+                                {row.LastUpdateTime && row.LastUpdateTime !== 'N/A' ? new Date(row.LastUpdateTime).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '-'}
+                              </td>
+                              <td className="px-3 py-2.5 border-r border-slate-200 bg-white">{row.BreakdownNoOfTimes || 0}</td>
+                              <td className="px-3 py-2.5 bg-white text-brand-danger font-bold">{row.BreakdownDurationMins || 0}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
                   </div>
                 </div>
 
@@ -2707,15 +2776,15 @@ function MachineCard({ machine }: { machine: MachineSummary, key?: string | numb
             <h4 className="text-lg font-display font-bold text-slate-900 tracking-tight">{machine.MachineNo}</h4>
             <div className={cn(
               "status-indicator",
-              statusGlow[machine.Status],
-              machine.Status === 'Running' ? 'bg-brand-success' : machine.Status === 'Idle' ? 'bg-brand-warning' : 'bg-brand-danger'
+              statusGlow[machine.MachineStatus as keyof typeof statusGlow] || statusGlow.Idle,
+              machine.MachineStatus === 'Running' ? 'bg-brand-success' : machine.MachineStatus === 'Idle' ? 'bg-brand-warning' : 'bg-brand-danger'
             )} />
           </div>
           <div className={cn(
             "inline-flex px-2 py-0.5 rounded text-[9px] font-bold uppercase tracking-widest border",
-            statusColors[machine.Status]
+            statusColors[machine.MachineStatus as keyof typeof statusColors] || statusColors.Idle
           )}>
-            {machine.Status}
+            {machine.MachineStatus}
           </div>
         </div>
         <div className="text-right">
@@ -2763,7 +2832,7 @@ function MachineCard({ machine }: { machine: MachineSummary, key?: string | numb
             animate={{ width: `${Math.min((machine.TotalProductionKgs / machine.TargetKgs) * 100, 100)}%` }}
             className={cn(
               "h-full transition-all duration-1000",
-              machine.Status === 'Running' ? 'bg-brand-primary' : 'bg-slate-300'
+              machine.MachineStatus === 'Running' ? 'bg-brand-primary' : 'bg-slate-300'
             )}
           />
         </div>

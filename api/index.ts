@@ -638,19 +638,37 @@ const safeHandler = (fn: (req: any, res: any) => Promise<void>) => async (req: a
 
     const summary = baseMachines.map((m: any) => {
       const machineProduction = masterData.filter((d: any) => d.MachineNo === m.id);
-      const dailyStats = dailyStatsMap.get(m.id) || { target: m.target || 0 };
+      const dailyStats = dailyStatsMap.get(m.id) || { 
+        target: m.target || 0,
+        numBreakdown: 0,
+        breakdownTime: 0,
+        numIdle: 0,
+        idleTime: 0
+      };
       
       return {
-        MachineNo: m.id,
-        TargetKgs: dailyStats.target,
-        TotalRolls: machineProduction.length,
+        Date: dateQuery || new Date().toISOString().split('T')[0],
+        MachineNo: m.id || 'Unknown',
+        TargetKgs: dailyStats.target || 0,
+        TotalRolls: machineProduction.length || 0,
         TotalMeter: machineProduction.reduce((acc, curr) => acc + (Number(curr.FinishedMeter) || 0), 0),
         TotalProductionKgs: machineProduction.reduce((acc, curr) => acc + (Number(curr.FinishedKgs) || 0), 0),
-        Status: m.status,
-        Reason: m.reason,
-        LastUpdate: machineProduction.length > 0 ? machineProduction[machineProduction.length - 1].DataUpdateTime : "N/A"
+        MachineStatus: m.status || 'Idle',
+        BreakdownType: m.status === 'Breakdown' ? (m.reason || '') : '',
+        ReasonOfIdle: m.status === 'Idle' ? (m.reason || '') : '',
+        LastUpdateTime: m.lastStatusChange || (machineProduction.length > 0 ? machineProduction[machineProduction.length - 1].DataUpdateTime : "N/A"),
+        BreakdownNoOfTimes: dailyStats.numBreakdown || 0,
+        BreakdownDurationMins: dailyStats.breakdownTime || 0,
+        IdleNoOfTimes: dailyStats.numIdle || 0,
+        IdleDurationMins: dailyStats.idleTime || 0,
       };
     });
+
+    // Save/Sync to Firebase collection "dashboard_table"
+    await Promise.all(summary.map(async (row) => {
+       const docRef = doc(db, 'dashboard_table', `${row.Date}_${row.MachineNo}`);
+       await setDoc(docRef, row);
+    }));
 
     res.json({
       summary,
