@@ -9,6 +9,37 @@ export function formatDate(date: Date): string {
   return date.toISOString().split('T')[0];
 }
 
+export function normalizeDateString(dateStr: string | number): string {
+  if (!dateStr) return '';
+  if (typeof dateStr === 'number') {
+    // Excel date number (days since 1900)
+    const d = new Date((dateStr - (25567 + 2)) * 86400 * 1000);
+    if (!isNaN(d.getTime())) {
+      return d.toISOString().split('T')[0];
+    }
+  }
+  
+  const str = String(dateStr).trim();
+  
+  // Already YYYY-MM-DD
+  if (/^\d{4}-\d{2}-\d{2}$/.test(str)) {
+    return str;
+  }
+  
+  // MM/DD/YYYY or DD/MM/YYYY or similar
+  try {
+    const d = new Date(str);
+    if (!isNaN(d.getTime())) {
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${y}-${m}-${day}`;
+    }
+  } catch (e) {}
+
+  return str;
+}
+
 export function getShiftAndDateForDhaka(date: Date = new Date()): { productionDate: string, shift: string } {
   try {
     const formatter = new Intl.DateTimeFormat('en-US', {

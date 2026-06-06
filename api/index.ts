@@ -28,8 +28,8 @@ const __dirname = path.dirname(__filename);
 let firebaseApp: any;
 let dbInstance: any;
 
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 // Hardcoded Fallback Config (from your firebase-applet-config.json)
 const FALLBACK_CONFIG = {
@@ -560,6 +560,121 @@ const safeHandler = (fn: (req: any, res: any) => Promise<void>) => async (req: a
     res.status(201).json({ 
       message: "Production Entry Saved Successfully", 
       entry: newEntry 
+    });
+  }));
+
+  app.post("/api/utils/normalize-dates", safeHandler(async (req, res) => {
+    const db = initializeFirebase();
+    const snap = await getDocs(collection(db, 'production_records'));
+    const batch = writeBatch(db);
+    let count = 0;
+    
+    // We need normalizeDateString here on the server
+    const normalizeDate = (dateStr: string | number) => {
+      if (!dateStr) return '';
+      if (typeof dateStr === 'number') {
+        const d = new Date((dateStr - (25567 + 2)) * 86400 * 1000);
+        if (!isNaN(d.getTime())) return d.toISOString().split('T')[0];
+      }
+      const str = String(dateStr).trim();
+      if (/^\d{4}-\d{2}-\d{2}$/.test(str)) return str;
+      try {
+        const d = new Date(str);
+        if (!isNaN(d.getTime())) {
+          return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        }
+      } catch (e) {}
+      return str;
+    };
+
+    snap.docs.forEach(d => {
+      const data = d.data();
+      const nDate = normalizeDate(data.ProductionDate);
+      if (nDate && nDate !== data.ProductionDate) {
+        batch.update(d.ref, { ProductionDate: nDate });
+        count++;
+      }
+    });
+
+    await batch.commit();
+    res.json({ message: `Normalized ${count} records` });
+  }));
+
+  app.post("/api/production/bulk", safeHandler(async (req, res) => {
+    const db = initializeFirebase();
+    const entries = req.body;
+    
+    if (!Array.isArray(entries)) {
+      return res.status(400).json({ message: "Payload must be an array of entries" });
+    }
+
+    const normalizeDate = (dateStr: string | number) => {
+      if (!dateStr) return '';
+      if (typeof dateStr === 'number') {
+        const d = new Date((dateStr - (25567 + 2)) * 86400 * 1000);
+        if (!isNaN(d.getTime())) return d.toISOString().split('T')[0];
+      }
+      const str = String(dateStr).trim();
+      if (/^\d{4}-\d{2}-\d{2}$/.test(str)) return str;
+      try {
+        const d = new Date(str);
+        if (!isNaN(d.getTime())) {
+          return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        }
+      } catch (e) {}
+      return str;
+    };
+
+    let lastRollNo = 0;
+    
+    // Process in chunks of 450 to avoid Firestore's 500 limit
+    const chunkSize = 450;
+    for (let i = 0; i < entries.length; i += chunkSize) {
+      const chunk = entries.slice(i, i + chunkSize);
+      const batch = writeBatch(db);
+      
+      for (const entry of chunk) {
+        if (!entry.RollID) {
+           entry.RollID = `EXT-IMPORTED-${Math.random().toString(36).substring(2,8).toUpperCase()}`;
+        } else {
+          const parts = entry.RollID.split('-');
+          if (parts.length === 3) {
+            const num = parseInt(parts[1]);
+            if (!isNaN(num) && num > lastRollNo) {
+              lastRollNo = num;
+            }
+          }
+        }
+        
+        const newRef = doc(collection(db, 'production_records'));
+        batch.set(newRef, {
+          ...entry,
+          ProductionDate: normalizeDate(entry.ProductionDate),
+          EntryTimestamp: entry.EntryTimestamp || new Date().toISOString(),
+          DataUpdateTime: entry.DataUpdateTime || new Date().toLocaleString(),
+          Fingerprint: entry.Fingerprint || Math.random().toString(36).substring(2, 10).toUpperCase(),
+          EnteredBy: entry.EnteredBy || "Imported Data",
+        });
+      }
+      
+      await batch.commit();
+    }
+    
+    // Also update settings.LAST_ROLL_NO if we imported larger roll numbers
+    if (lastRollNo > 0) {
+      const settingsRef = doc(db, 'app_config', 'roll_settings');
+      const docSnap = await getDoc(settingsRef);
+      let currentNo = 0;
+      if (docSnap.exists()) {
+        currentNo = docSnap.data().LAST_ROLL_NO || 0;
+      }
+      if (lastRollNo > currentNo) {
+        await setDoc(settingsRef, { LAST_ROLL_NO: lastRollNo }, { merge: true });
+      }
+    }
+
+    res.status(201).json({ 
+      message: `${entries.length} records imported successfully`
     });
   }));
 

@@ -36,7 +36,7 @@ import {
   X
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { cn, formatDate, getShiftAndDateForDhaka } from './lib/utils';
+import { cn, formatDate, getShiftAndDateForDhaka, normalizeDateString } from './lib/utils';
 import BreakdownDataTable from './components/BreakdownDataTable';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, User } from 'firebase/auth';
@@ -700,7 +700,7 @@ export default function App() {
   const currentProductionDateStr = dashboardDateFilter || dhakaShiftInfo.productionDate; // e.g. "2026-05-22"
 
   // Filter records belonging to the current operational date
-  const todayRecords = productionRecords.filter((record: any) => record.ProductionDate === currentProductionDateStr);
+  const todayRecords = productionRecords.filter((record: any) => normalizeDateString(record.ProductionDate) === currentProductionDateStr);
 
   // Day shift records for the current operational date
   const todayDayRecords = todayRecords.filter((record: any) => record.Shift === 'Day');
@@ -735,7 +735,7 @@ export default function App() {
 
   const filteredRecords = productionRecords.filter((record: any) => {
     const filterDate = dashboardDateFilter || getShiftAndDateForDhaka().productionDate;
-    if (filterDate && record.ProductionDate !== filterDate) return false;
+    if (filterDate && normalizeDateString(record.ProductionDate) !== filterDate) return false;
     if (!recordSearchQuery) return true;
     const q = recordSearchQuery.toLowerCase();
     return (
@@ -2154,13 +2154,119 @@ export default function App() {
                       <p className="text-sm text-slate-500 font-medium tracking-tight">Full historical database of all manufacturing cycles</p>
                     </div>
                   </div>
-                  <button 
-                    onClick={() => fetchProductionRecords()}
-                    className="px-4 py-2 bg-white border border-slate-200 rounded-xl text-[10px] font-black uppercase tracking-widest text-slate-600 hover:bg-slate-50 transition-all flex items-center gap-2"
-                  >
-                    <RefreshCw size={14} />
-                    Sync Data
-                  </button>
+                  <div className="flex items-center gap-3">
+                    <input 
+                      type="file" 
+                      accept=".xlsx, .xls, .csv" 
+                      id="excel-upload" 
+                      className="hidden" 
+                      onChange={async (e) => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        try {
+                          const reader = new FileReader();
+                          reader.onload = async (event) => {
+                            const data = new Uint8Array(event.target?.result as ArrayBuffer);
+                            const XLSX = await import('xlsx');
+                            const workbook = XLSX.read(data, { type: 'array' });
+                            const firstSheet = workbook.SheetNames[0];
+                            const worksheet = workbook.Sheets[firstSheet];
+                            const jsonData = XLSX.utils.sheet_to_json(worksheet, { raw: false });
+                            
+                            if (jsonData.length === 0) {
+                              showToast("No data found in file", "error");
+                              return;
+                            }
+                            
+                            // Map the headers from excel to the schema
+                            const mappedData = jsonData.map((row: any) => ({
+                              ProductionDate: row['Production Date'] || row['ProductionDate'] || '',
+                              Shift: row['Shift'] || '',
+                              ProductionType: row['Production Type'] || row['ProductionType'] || '',
+                              OperatorID: row['Operator ID'] || row['OperatorID'] || '',
+                              MachineNo: row['Machine no'] || row['MachineNo'] || '',
+                              Year: row['Year'] || '',
+                              PINumber: row['PI NUMBER'] || row['PINumber'] || row['PI Number'] || '',
+                              TubeSize: row['Tube Size'] || row['TubeSize'] || '',
+                              UOM: row['UOM'] || '',
+                              Material: row['Material'] || '',
+                              Micron: row['Micron'] || '',
+                              InLinePrint: row['InLine Print'] || row['InLinePrint'] || '',
+                              FinishedMeter: row['Finished Meter'] || row['FinishedMeter'] || '0',
+                              FinishedKgs: row['Finished Kgs'] || row['FinishedKgs'] || '0',
+                              RollLocation: row['Roll Location'] || row['RollLocation'] || '',
+                              RollID: row['Roll ID'] || row['RollID'] || '',
+                              DataUpdateTime: row['Data Update Time'] || row['DataUpdateTime'] || new Date().toLocaleString(),
+                              Fingerprint: row['Fingerprint'] || Math.random().toString(36).substring(2, 10).toUpperCase(),
+                              EnteredBy: row['Entered By'] || row['EnteredBy'] || 'Imported Data',
+                              OperatorName: row['Operator Name'] || row['Opeator Name'] || row['OperatorName'] || '',
+                              ScrapKgs: row['Scrap Kgs'] || row['ScrapKgs'] || '0',
+                              ProductionYear: row['Production Year'] || row['ProductionYear'] || '',
+                              ProductionMonth: row['Production Month'] || row['ProductionMonth'] || '',
+                              MachineStatus: row['MachineStatus'] || 'Running'
+                            }));
+
+                            // Extract already existing Roll IDs to skip them
+                            const existingRollIds = new Set(productionRecords.map(r => r.RollID).filter(Boolean));
+                            
+                            const newRecordsToUpload = mappedData.filter(d => 
+                              !d.RollID || !existingRollIds.has(String(d.RollID).trim())
+                            );
+
+                            if (newRecordsToUpload.length === 0) {
+                              showToast("No new records to upload. All data already exists in the system.", "success");
+                              e.target.value = '';
+                              return;
+                            }
+
+                            try {
+                              showToast(`Found ${newRecordsToUpload.length} new records to upload...`, "success");
+                              const chunkSize = 500;
+                              let uploadedCount = 0;
+                              
+                              for (let i = 0; i < newRecordsToUpload.length; i += chunkSize) {
+                                const chunk = newRecordsToUpload.slice(i, i + chunkSize);
+                                const res = await fetch('/api/production/bulk', {
+                                  method: 'POST',
+                                  headers: { 'Content-Type': 'application/json' },
+                                  body: JSON.stringify(chunk)
+                                });
+                                if (!res.ok) throw new Error("Failed to import data chunk");
+                                
+                                uploadedCount += chunk.length;
+                                showToast(`Progress: ${uploadedCount} / ${newRecordsToUpload.length} records...`, "success");
+                              }
+
+                              showToast(`All ${newRecordsToUpload.length} new records imported successfully!`, 'success');
+                              await fetchProductionRecords();
+                              e.target.value = ''; // Reset input
+                            } catch (err) {
+                              console.error(err);
+                              showToast("Failed to upload to server", 'error');
+                            }
+                          };
+                          reader.readAsArrayBuffer(file);
+                        } catch (err) {
+                          console.error('Error reading excel file:', err);
+                          showToast("Failed to read file", 'error');
+                        }
+                      }}
+                    />
+                    <label 
+                      htmlFor="excel-upload"
+                      className="cursor-pointer px-4 py-2 bg-white border border-brand-primary/20 rounded-xl text-[10px] font-black uppercase tracking-widest text-brand-primary hover:bg-brand-primary hover:text-white transition-all flex items-center gap-2"
+                    >
+                      <Database size={14} />
+                      Import Excel
+                    </label>
+                    <button 
+                      onClick={() => fetchProductionRecords()}
+                      className="px-4 py-2 bg-white border border-slate-200 rounded-xl text-[10px] font-black uppercase tracking-widest text-slate-600 hover:bg-slate-50 transition-all flex items-center gap-2"
+                    >
+                      <RefreshCw size={14} />
+                      Sync Data
+                    </button>
+                  </div>
                 </div>
 
                 {/* Search field for old database entries */}
