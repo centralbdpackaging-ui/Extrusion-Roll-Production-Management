@@ -235,7 +235,63 @@ app.get("/api/debug/firebase", async (req, res) => {
     };
   };
 
+  const checkAndResetDailyStats = async () => {
+    try {
+      const db = initializeFirebase();
+      if (!db) return;
+
+      const d = new Date();
+      const formatter = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Dhaka', hour12: false, year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric' });
+      const parts = formatter.formatToParts(d);
+      const pm: any = {};
+      parts.forEach(p => pm[p.type] = p.value);
+      
+      const pYear = parseInt(pm.year, 10);
+      const pMonth = parseInt(pm.month, 10) - 1; // JS month 0-11
+      const pDay = parseInt(pm.day, 10);
+      const pHour = parseInt(pm.hour, 10);
+      
+      const dhakaTimeDate = new Date(pYear, pMonth, pDay);
+      if (pHour < 8) {
+        dhakaTimeDate.setDate(dhakaTimeDate.getDate() - 1);
+      }
+      
+      const currentProdDateStr = `${dhakaTimeDate.getFullYear()}-${String(dhakaTimeDate.getMonth()+1).padStart(2,'0')}-${String(dhakaTimeDate.getDate()).padStart(2,'0')}`;
+
+      const configDocRef = doc(db, 'app_config', 'daily_reset');
+      const configDoc = await getDoc(configDocRef);
+      const lastReset = configDoc.exists() ? configDoc.data().lastResetDate : null;
+
+      if (lastReset !== currentProdDateStr) {
+        console.log(`[Daily Reset] Rolling over from ${lastReset} to ${currentProdDateStr}`);
+        const machineSnap = await getDocs(collection(db, 'machines'));
+        
+        let batch = writeBatch(db);
+        let count = 0;
+        
+        machineSnap.docs.forEach(docSnap => {
+          batch.update(docSnap.ref, {
+            target: 0,
+            numIdle: 0,
+            numBreakdown: 0,
+            idleTime: 0,
+            breakdownTime: 0
+          });
+          count++;
+          // Firestore batches are limited to 500 operations, but we probably have <100 machines
+        });
+        
+        await batch.commit();
+        await setDoc(configDocRef, { lastResetDate: currentProdDateStr }, { merge: true });
+        console.log(`[Daily Reset] Successfully reset ${count} machines' daily statistics.`);
+      }
+    } catch (err: any) {
+      console.error("[Daily Reset Error]:", err.message);
+    }
+  };
+
   const getMachines = async () => {
+
     const db = initializeFirebase();
     if (!db) return [];
     const s = await getDocs(collection(db, 'machines'));
@@ -327,8 +383,33 @@ const safeHandler = (fn: (req: any, res: any) => Promise<void>) => async (req: a
   }));
 
   app.get("/api/machines", safeHandler(async (req, res) => {
-    const machineMaster = await getMachines();
-    res.json(machineMaster);
+    const db = initializeFirebase();
+    const dateQuery = req.query.date as string;
+    
+    const machineSnapshot = await getDocs(collection(db, 'machines'));
+    const baseMachines = machineSnapshot.docs.map(d => d.data());
+    
+    if (dateQuery) {
+      const statsQuery = query(collection(db, 'machine_daily_stats'), where('date', '==', dateQuery));
+      const statsSnapshot = await getDocs(statsQuery);
+      const dailyStatsMap = new Map();
+      statsSnapshot.docs.forEach(d => {
+        const data = d.data();
+        dailyStatsMap.set(data.machineId, data);
+      });
+      
+      const merged = baseMachines.map((m: any) => {
+        const stats = dailyStatsMap.get(m.id) || { target: 0, numIdle: 0, numBreakdown: 0, idleTime: 0, breakdownTime: 0 };
+        return {
+          ...m,
+          ...stats,
+          id: m.id
+        };
+      });
+      return res.json(merged);
+    }
+    
+    res.json(baseMachines);
   }));
 
   app.post("/api/machines", safeHandler(async (req, res) => {
@@ -361,22 +442,54 @@ const safeHandler = (fn: (req: any, res: any) => Promise<void>) => async (req: a
 
   app.post("/api/machines/status", safeHandler(async (req, res) => {
     const db = initializeFirebase();
-    const { id, status, reason, target, numIdle, numBreakdown, idleTime, breakdownTime, lastStatusChange } = req.body;
+    const { id, date, status, reason, target, numIdle, numBreakdown, idleTime, breakdownTime, lastStatusChange } = req.body;
     const docRef = doc(db, 'machines', id);
     const d = await getDoc(docRef);
     if (d.exists()) {
-      const updates: any = {};
-      if (status) updates.status = status;
-      if (reason !== undefined) updates.reason = reason;
-      if (target !== undefined) updates.target = target;
-      if (numIdle !== undefined) updates.numIdle = Number(numIdle) || 0;
-      if (numBreakdown !== undefined) updates.numBreakdown = Number(numBreakdown) || 0;
-      if (idleTime !== undefined) updates.idleTime = Number(idleTime) || 0;
-      if (breakdownTime !== undefined) updates.breakdownTime = Number(breakdownTime) || 0;
-      if (lastStatusChange !== undefined) updates.lastStatusChange = lastStatusChange;
-      await updateDoc(docRef, updates);
-      const updated = await getDoc(docRef);
-      res.json({ message: "Machine updated successfully", machine: updated.data() });
+      const baseUpdates: any = {};
+      if (status) baseUpdates.status = status;
+      if (reason !== undefined) baseUpdates.reason = reason;
+      if (lastStatusChange !== undefined) baseUpdates.lastStatusChange = lastStatusChange;
+      
+      if (Object.keys(baseUpdates).length > 0) {
+        await updateDoc(docRef, baseUpdates);
+      }
+      
+      // Update daily stats if a date is provided
+      if (date) {
+         const statsRef = doc(db, 'machine_daily_stats', `${id}_${date}`);
+         const statsDoc = await getDoc(statsRef);
+         const statsUpdates: any = {};
+         if (target !== undefined) statsUpdates.target = target;
+         if (numIdle !== undefined) statsUpdates.numIdle = Number(numIdle) || 0;
+         if (numBreakdown !== undefined) statsUpdates.numBreakdown = Number(numBreakdown) || 0;
+         if (idleTime !== undefined) statsUpdates.idleTime = Number(idleTime) || 0;
+         if (breakdownTime !== undefined) statsUpdates.breakdownTime = Number(breakdownTime) || 0;
+         
+         if (Object.keys(statsUpdates).length > 0) {
+            if (statsDoc.exists()) {
+               await updateDoc(statsRef, statsUpdates);
+            } else {
+               await setDoc(statsRef, {
+                 machineId: id,
+                 date: date,
+                 ...statsUpdates
+               });
+            }
+         }
+      }
+
+      // Fetch the merged object back to return to the client
+      const updatedBase = await getDoc(docRef);
+      let mergedData = updatedBase.data();
+      if (date) {
+         const statsDocFinal = await getDoc(doc(db, 'machine_daily_stats', `${id}_${date}`));
+         if (statsDocFinal.exists()) {
+            mergedData = { ...mergedData, ...statsDocFinal.data() };
+         }
+      }
+      
+      res.json({ message: "Machine updated successfully", machine: mergedData });
     } else {
       res.status(404).json({ message: "Machine not found" });
     }
@@ -482,21 +595,54 @@ const safeHandler = (fn: (req: any, res: any) => Promise<void>) => async (req: a
     res.json({ message: "Production entry updated successfully" });
   }));
 
+  app.get("/api/machine-logs", safeHandler(async (req, res) => {
+    const db = initializeFirebase();
+    if (!db) return res.json([]);
+    const s = await getDocs(query(collection(db, 'machine_logs'), orderBy('endTime', 'desc')));
+    res.json(s.docs.map(d => ({ id: d.id, ...d.data() })));
+  }));
+
+  app.post("/api/machine-logs", safeHandler(async (req, res) => {
+    const db = initializeFirebase();
+    if (!db) return res.status(500).json({ error: "No DB" });
+    const log = req.body;
+    const docRef = await addDoc(collection(db, 'machine_logs'), log);
+    res.json({ message: "Log created", id: docRef.id });
+  }));
+
   app.get("/api/dashboard", safeHandler(async (req, res) => {
     const db = initializeFirebase();
+    const dateQuery = req.query.date as string;
     if (!db) throw new Error("Database not initialized");
 
     const machineSnapshot = await getDocs(collection(db, 'machines'));
-    const machineMaster = machineSnapshot.docs.map(d => d.data());
+    const baseMachines = machineSnapshot.docs.map(d => d.data());
     
-    const productionSnapshot = await getDocs(query(collection(db, 'production_records'), orderBy('EntryTimestamp', 'asc')));
+    // Fetch daily stats to merge target
+    const dailyStatsMap = new Map();
+    if (dateQuery) {
+        const statsQuery = query(collection(db, 'machine_daily_stats'), where('date', '==', dateQuery));
+        const statsSnapshot = await getDocs(statsQuery);
+        statsSnapshot.docs.forEach(d => {
+            const data = d.data();
+            dailyStatsMap.set(data.machineId, data);
+        });
+    }
+
+    const productionQuery = dateQuery 
+      ? query(collection(db, 'production_records'), where('ProductionDate', '==', dateQuery))
+      : query(collection(db, 'production_records'));
+      
+    const productionSnapshot = await getDocs(productionQuery);
     const masterData = productionSnapshot.docs.map(d => d.data());
 
-    const summary = machineMaster.map((m: any) => {
+    const summary = baseMachines.map((m: any) => {
       const machineProduction = masterData.filter((d: any) => d.MachineNo === m.id);
+      const dailyStats = dailyStatsMap.get(m.id) || { target: m.target || 0 };
+      
       return {
         MachineNo: m.id,
-        TargetKgs: m.target,
+        TargetKgs: dailyStats.target,
         TotalRolls: machineProduction.length,
         TotalMeter: machineProduction.reduce((acc, curr) => acc + (Number(curr.FinishedMeter) || 0), 0),
         TotalProductionKgs: machineProduction.reduce((acc, curr) => acc + (Number(curr.FinishedKgs) || 0), 0),

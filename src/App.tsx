@@ -36,6 +36,7 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn, formatDate, getShiftAndDateForDhaka } from './lib/utils';
+import BreakdownDataTable from './components/BreakdownDataTable';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, User } from 'firebase/auth';
 import firebaseConfig from '../firebase-applet-config.json';
@@ -117,8 +118,31 @@ const trendData = [
   { time: '15:00', prod: 720 },
 ];
 
+const formatMachineDuration = (hoursNum: number): string => {
+  if (!hoursNum || hoursNum <= 0) return "0s";
+  const totalSeconds = Math.round(hoursNum * 3600);
+  if (totalSeconds < 60) {
+    return `${totalSeconds}s`;
+  }
+  const totalMinutes = Math.floor(totalSeconds / 60);
+  const remainingSeconds = totalSeconds % 60;
+  if (totalMinutes < 60) {
+    if (remainingSeconds > 0) {
+      return `${totalMinutes}m ${remainingSeconds}s`;
+    }
+    return `${totalMinutes}m`;
+  }
+  const totalHours = Math.floor(totalMinutes / 60);
+  const remainingMinutes = totalMinutes % 60;
+  if (remainingMinutes > 0) {
+    return `${totalHours}h ${remainingMinutes}m`;
+  }
+  return `${totalHours}h`;
+};
+
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'entry' | 'dashboard' | 'history' | 'machines' | 'master-config' | 'operators' | 'master-production-record'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'entry' | 'dashboard' | 'history' | 'machines' | 'master-config' | 'operators' | 'master-production-record' | 'breakdown-data'>('dashboard');
+  const [dashboardDateFilter, setDashboardDateFilter] = useState<string>('');
   
   // Calculate Bangladesh shift and operational production date
   const initialShiftInfo = getShiftAndDateForDhaka();
@@ -191,6 +215,12 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
+  useEffect(() => {
+    if (activeTab === 'breakdown-data') {
+      fetchMachines();
+    }
+  }, [activeTab]);
+
   const handleGoogleSignIn = async () => {
     try {
       await signInWithPopup(auth, provider);
@@ -262,9 +292,11 @@ export default function App() {
     }
   };
 
-  const fetchDashboard = async () => {
+  const fetchDashboard = async (dateOverride?: string) => {
     try {
-      const res = await fetch('/api/dashboard');
+      const dhakaShiftInfo = getShiftAndDateForDhaka();
+      const dateParam = dateOverride || dashboardDateFilter || dhakaShiftInfo.productionDate;
+      const res = await fetch(`/api/dashboard?date=${dateParam}`);
       const data = await res.json();
       if (res.ok) {
         setDashboardData(data);
@@ -275,6 +307,13 @@ export default function App() {
       console.error("Failed to fetch dashboard", err);
     }
   };
+
+  // Ensure active tab or dashboardDateFilter triggers dashboard refresh
+  useEffect(() => {
+    if (activeTab === 'dashboard' || dashboardDateFilter) {
+      fetchDashboard();
+    }
+  }, [activeTab, dashboardDateFilter]);
 
   const fetchRecentEntries = async () => {
     try {
@@ -334,9 +373,11 @@ export default function App() {
     }
   };
 
-  const fetchMachines = async () => {
+  const fetchMachines = async (dateOverride?: string) => {
     try {
-      const res = await fetch('/api/machines');
+      const dhakaShiftInfo = getShiftAndDateForDhaka();
+      const dateParam = dateOverride || dashboardDateFilter || dhakaShiftInfo.productionDate;
+      const res = await fetch(`/api/machines?date=${dateParam}`);
       const data = await res.json();
       if (res.ok && Array.isArray(data)) {
         setMachines(data);
@@ -348,6 +389,12 @@ export default function App() {
       setMachines([]);
     }
   };
+
+  useEffect(() => {
+    if (activeTab === 'breakdown-data' || dashboardDateFilter) {
+      fetchMachines();
+    }
+  }, [dashboardDateFilter, activeTab]);
 
   const fetchOperators = async () => {
     try {
@@ -364,12 +411,71 @@ export default function App() {
     }
   };
 
-  const updateMachineStatus = async (id: string, updates: Partial<MachineMaster>) => {
+  const handleReasonChange = async (m: MachineMaster, newReason: string) => {
     try {
+      const parentNow = new Date().toISOString();
+      
+      // Calculate elapsed time for the PREVIOUS reason
+      const oldStatus = m.status;
+      const lastChangeStr = m.lastStatusChange || new Date().toISOString();
+      const elapsedMs = Date.now() - new Date(lastChangeStr).getTime();
+      const elapsedHours = Number(Math.max(0, elapsedMs / (1000 * 60 * 60)).toFixed(3)) || 0;
+
+      const updates: Partial<MachineMaster> = {
+        reason: newReason,
+        lastStatusChange: parentNow
+      };
+
+      if (oldStatus === 'Idle') {
+        updates.idleTime = Number(((m.idleTime || 0) + elapsedHours).toFixed(3));
+      } else if (oldStatus === 'Breakdown') {
+        updates.breakdownTime = Number(((m.breakdownTime || 0) + elapsedHours).toFixed(3));
+      }
+
+      // Log the old state to machine_logs if it was Idle or Breakdown
+      if ((oldStatus === 'Idle' || oldStatus === 'Breakdown') && elapsedHours > 0.001) {
+        fetch('/api/machine-logs', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            machineId: m.id,
+            date: getShiftAndDateForDhaka(new Date(parentNow)).productionDate,
+            status: oldStatus,
+            reason: m.reason || 'Unspecified',
+            durationHrs: elapsedHours,
+            startTime: lastChangeStr,
+            endTime: parentNow
+          })
+        }).catch(err => console.error("Failed to log machine state", err));
+      }
+
+      // Update locally immediately
+      setMachines(prev => prev.map(mach => mach.id === m.id ? { ...mach, ...updates } : mach));
+
+      const dhakaShiftInfoLoc = getShiftAndDateForDhaka(new Date(parentNow));
+      const updateDateLoc = dashboardDateFilter || dhakaShiftInfoLoc.productionDate;
       const res = await fetch('/api/machines/status', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id, ...updates })
+        body: JSON.stringify({ id: m.id, date: updateDateLoc, ...updates })
+      });
+      if (!res.ok) {
+        showToast("Failed to change reason", 'error');
+      }
+    } catch (err) {
+      console.error(err);
+      showToast("Failed to change reason", 'error');
+    }
+  };
+
+  const updateMachineStatus = async (id: string, updates: Partial<MachineMaster>) => {
+    try {
+      const dhakaShiftInfo = getShiftAndDateForDhaka();
+      const updateDate = dashboardDateFilter || dhakaShiftInfo.productionDate;
+      const res = await fetch('/api/machines/status', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, date: updateDate, ...updates })
       });
       if (res.ok) {
         showToast("Machine updated successfully", 'success');
@@ -401,15 +507,30 @@ export default function App() {
         updates.breakdownTime = Number(((m.breakdownTime || 0) + elapsedHours).toFixed(3));
       }
 
+      // Log the old state to machine_logs if it was Idle or Breakdown
+      if ((oldStatus === 'Idle' || oldStatus === 'Breakdown') && elapsedHours > 0.001) {
+        fetch('/api/machine-logs', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            machineId: m.id,
+            date: getShiftAndDateForDhaka(new Date(parentNow)).productionDate,
+            status: oldStatus,
+            reason: m.reason || 'Unspecified',
+            durationHrs: elapsedHours,
+            startTime: lastChangeStr,
+            endTime: parentNow
+          })
+        }).catch(err => console.error("Failed to log machine state", err));
+      }
+
       // 2. Increment counters when entering a new state
       if (newStatus === 'Idle') {
         updates.numIdle = (m.numIdle || 0) + 1;
-        const defaultIdleReason = (masterStore.idleReasons && masterStore.idleReasons[0]) || 'No Material';
-        updates.reason = defaultIdleReason;
+        updates.reason = "";
       } else if (newStatus === 'Breakdown') {
         updates.numBreakdown = (m.numBreakdown || 0) + 1;
-        const defaultBreakdownReason = (masterStore.breakdownReasons && masterStore.breakdownReasons[0]) || 'Mechanical';
-        updates.reason = defaultBreakdownReason;
+        updates.reason = "";
       } else if (newStatus === 'Running') {
         updates.reason = 'NO_ALERTS';
       }
@@ -417,10 +538,12 @@ export default function App() {
       // Update locally immediately for snappy interface feedback
       setMachines(prev => prev.map(mach => mach.id === m.id ? { ...mach, ...updates } : mach));
 
+      const dhakaShiftInfoLoc2 = getShiftAndDateForDhaka(new Date(parentNow));
+      const updateDateLoc2 = dashboardDateFilter || dhakaShiftInfoLoc2.productionDate;
       const res = await fetch('/api/machines/status', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: m.id, ...updates })
+        body: JSON.stringify({ id: m.id, date: updateDateLoc2, ...updates })
       });
       if (res.ok) {
         showToast(`Machine status set to ${newStatus}`, 'success');
@@ -566,7 +689,7 @@ export default function App() {
 
   // Current Dhaka date & shift information
   const dhakaShiftInfo = getShiftAndDateForDhaka();
-  const currentProductionDateStr = dhakaShiftInfo.productionDate; // e.g. "2026-05-22"
+  const currentProductionDateStr = dashboardDateFilter || dhakaShiftInfo.productionDate; // e.g. "2026-05-22"
 
   // Filter records belonging to the current operational date
   const todayRecords = productionRecords.filter((record: any) => record.ProductionDate === currentProductionDateStr);
@@ -586,6 +709,10 @@ export default function App() {
   const todayTotalMeter = todayRecords.reduce((acc, curr) => acc + (Number(curr.FinishedMeter) || 0), 0);
   const todayTotalScrap = todayRecords.reduce((acc, curr) => acc + (Number(curr.ScrapKgs) || 0), 0);
 
+  const allTimeTotalKgs = productionRecords.reduce((acc, curr) => acc + (Number(curr.FinishedKgs) || 0), 0);
+  const totalTarget = machines.reduce((acc, curr) => acc + (Number(curr.target) || 0), 0);
+  const efficiency = totalTarget > 0 ? ((todayTotalKgs / totalTarget) * 100).toFixed(1) : "0.0";
+
   // Day shift calculations
   const todayDayTotalKgs = todayDayRecords.reduce((acc, curr) => acc + (Number(curr.FinishedKgs) || 0), 0);
   const todayDayTotalRolls = todayDayRecords.length;
@@ -599,6 +726,8 @@ export default function App() {
   const todayNightTotalScrap = todayNightRecords.reduce((acc, curr) => acc + (Number(curr.ScrapKgs) || 0), 0);
 
   const filteredRecords = productionRecords.filter((record: any) => {
+    const filterDate = dashboardDateFilter || getShiftAndDateForDhaka().productionDate;
+    if (filterDate && record.ProductionDate !== filterDate) return false;
     if (!recordSearchQuery) return true;
     const q = recordSearchQuery.toLowerCase();
     return (
@@ -670,6 +799,12 @@ export default function App() {
             label="LOGBOOK" 
             active={activeTab === 'history'} 
             onClick={() => setActiveTab('history')} 
+          />
+          <SidebarLink 
+            icon={<AlertTriangle size={18} />} 
+            label="BREAKDOWN DATA" 
+            active={activeTab === 'breakdown-data'} 
+            onClick={() => setActiveTab('breakdown-data')} 
           />
           <div className="pt-6 pb-2">
             <p className="px-4 text-[9px] font-bold text-slate-400 uppercase tracking-[0.2em] mb-2">MASTER DATA</p>
@@ -743,7 +878,8 @@ export default function App() {
                activeTab === 'entry' ? 'Production Entry' : 
                activeTab === 'history' ? 'Operation Logs' : 
                activeTab === 'master-config' ? 'Master Data Table' : 
-               activeTab === 'operators' ? 'Operator Management' : 'Target & Machines'}
+               activeTab === 'operators' ? 'Operator Management' : 
+               activeTab === 'breakdown-data' ? 'Breakdown Data' : 'System Setup'}
             </h2>
             <div className="flex items-center gap-2 px-2 py-0.5 rounded bg-emerald-50 border border-emerald-100">
                <Database size={10} className="text-emerald-500" />
@@ -752,19 +888,23 @@ export default function App() {
             <div className="h-4 w-[1px] bg-slate-200" />
             <div className="flex items-center gap-2 text-slate-400 text-[10px] font-mono font-bold uppercase">
               <Clock size={14} className="text-brand-primary" />
-              <span className="tracking-widest">{new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}</span>
+              <input 
+                type="date"
+                value={dashboardDateFilter || currentProductionDateStr}
+                onChange={(e) => setDashboardDateFilter(e.target.value)}
+                className="bg-transparent border-none p-0 tracking-widest text-[#94a3b8] focus:ring-0 cursor-pointer"
+                style={{ WebkitAppearance: 'none' }}
+              />
             </div>
           </div>
 
           <div className="flex items-center gap-6">
-            {dashboardData && dashboardData.dailyTotals && (
-              <div className="hidden xl:flex items-center gap-8">
-                <MetricHead label="TODAY KG (COMBINED)" value={`${todayTotalKgs.toFixed(1)}`} unit="KG" color="text-brand-primary animate-pulse" />
-                <MetricHead label="TOTAL KG (ALL-TIME)" value={`${dashboardData.dailyTotals.totalKgs}`} unit="KG" />
-                <MetricHead label="EFFICIENCY" value="94.2" unit="%" color="text-brand-success" />
-                <MetricHead label="ACTIVE" value={`${dashboardData.summary.filter(m => m.Status === 'Running').length}/${dashboardData.summary.length}`} unit="NODES" />
-              </div>
-            )}
+            <div className="hidden xl:flex items-center gap-8">
+              <MetricHead label="DAILY KG (COMBINED)" value={`${todayTotalKgs.toFixed(1)}`} unit="KG" color="text-brand-primary animate-pulse" />
+              <MetricHead label="TARGET KG (TODAY)" value={`${totalTarget.toFixed(1)}`} unit="KG" />
+              <MetricHead label="EFFICIENCY" value={efficiency} unit="%" color="text-brand-success" />
+              <MetricHead label="ACTIVE" value={`${machines.filter(m => m.status === 'Running').length}/${machines.length}`} unit="NODES" />
+            </div>
             <div className="flex items-center gap-2">
               <button className="p-2.5 rounded-full bg-white border border-slate-200 text-slate-400 hover:text-slate-600 transition-all relative group shadow-sm">
                 <div className="absolute top-2 right-2 w-1.5 h-1.5 bg-brand-danger rounded-full border border-white" />
@@ -819,28 +959,28 @@ export default function App() {
                 {/* Stats Grid */}
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
                    <StatCard 
-                    title="Today's Combined Output" 
+                    title="Daily Combined Output" 
                     value={todayTotalKgs.toFixed(1)} 
                     unit="KGS" 
                     trend={`${todayDayTotalKgs.toFixed(0)}k Day + ${todayNightTotalKgs.toFixed(0)}k Night`} 
                     icon={<TrendingUp className="text-emerald-400" />} 
                   />
                    <StatCard 
-                    title="Today's Finished Rolls" 
+                    title="Daily Finished Rolls" 
                     value={`${todayTotalRolls}`} 
                     unit="ROLLS" 
                     trend={`${todayDayTotalRolls} Day + ${todayNightTotalRolls} Night`} 
                     icon={<Package className="text-blue-400" />} 
                   />
                    <StatCard 
-                    title="Today's Total Meterage" 
+                    title="Daily Total Meterage" 
                     value={todayTotalMeter.toLocaleString()} 
                     unit="METER" 
                     trend={`${todayDayTotalMeter.toLocaleString()} Day + ${todayNightTotalMeter.toLocaleString()} Night`} 
                     icon={<Ruler className="text-amber-400" />} 
                   />
                    <StatCard 
-                    title="Today's Waste/Scrap" 
+                    title="Daily Waste/Scrap" 
                     value={todayTotalScrap.toFixed(1)} 
                     unit="KGS" 
                     trend={`${todayDayTotalScrap.toFixed(1)} Day + ${todayNightTotalScrap.toFixed(1)} Night`} 
@@ -854,7 +994,7 @@ export default function App() {
                     <div className="space-y-1">
                       <h4 className="font-display font-bold text-base flex items-center gap-2 text-slate-800">
                         <CalendarDays size={18} className="text-brand-primary" />
-                        Today's Shift-wise Combine Summary
+                        Shift-wise Combine Summary
                       </h4>
                       <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest font-mono">
                         Bangladesh Stand. Time | Operational Date: <span className="text-brand-primary font-bold">{new Date(currentProductionDateStr).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}</span> (08 AM - 08 AM)
@@ -1508,110 +1648,100 @@ export default function App() {
                 exit={{ opacity: 0, y: -10 }}
                 className="space-y-6"
               >
-                <div className="flex items-center justify-between">
-                   <h3 className="text-xl font-display font-bold flex items-center gap-3 text-slate-900">
-                     <div className="w-10 h-10 rounded-xl bg-brand-primary/5 flex items-center justify-center text-brand-primary border border-brand-primary/10">
-                       <Layers size={22} />
-                     </div>
-                     Hardware Infrastructure Registry
-                   </h3>
-                   <div className="text-[10px] text-slate-400 font-bold uppercase tracking-[0.2em] bg-white px-4 py-2 rounded-xl border border-slate-100 shadow-sm">
-                     AUTO-SYNC: <span className="text-brand-success ml-1">ENABLED</span>
-                   </div>
-                </div>
-
                 <div className="glass-panel shadow-md border-slate-100">
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-left border-collapse">
-                      <thead>
-                        <tr className="border-b border-slate-100 bg-slate-50/50">
-                          <th className="px-8 py-5 text-[10px] font-bold text-slate-400 uppercase tracking-widest">MACHINE ID</th>
-                          <th className="px-8 py-5 text-[10px] font-bold text-slate-400 uppercase tracking-widest">TARGET (KG)</th>
-                          <th className="px-8 py-5 text-[10px] font-bold text-slate-400 uppercase tracking-widest">CURRENT STATE</th>
-                          <th className="px-8 py-5 text-[10px] font-bold text-slate-400 uppercase tracking-widest">REASON</th>
-                          <th className="px-8 py-5 text-[10px] font-bold text-slate-400 uppercase tracking-widest">NUMBER OF IDLE</th>
-                          <th className="px-8 py-5 text-[10px] font-bold text-slate-400 uppercase tracking-widest">NUMBER OF BREAKDOWN</th>
-                          <th className="px-8 py-5 text-[10px] font-bold text-slate-400 uppercase tracking-widest">IDLE TIME</th>
-                          <th className="px-8 py-5 text-[10px] font-bold text-slate-400 uppercase tracking-widest">BREAKDOWN TIME</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-50">
-                        {machines.map((m) => (
-                           <tr key={m.id} className="hover:bg-slate-50/50 transition-colors group">
-                             <td className="px-8 py-5">
-                               <p className="font-bold text-slate-900 tracking-tight">{m.id}</p>
-                               <p className="text-[10px] text-slate-400 font-mono tracking-tighter">NODE-00{m.id.split('-')[1] || 'X'}</p>
-                             </td>
-                             <td className="px-8 py-5">
-                               <input 
-                                 type="number" 
-                                 defaultValue={m.target}
-                                 onBlur={(e) => updateMachineStatus(m.id, { target: Number(e.target.value) })}
-                                 className="w-32 bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm focus:ring-2 focus:ring-brand-primary/20 focus:border-brand-primary/50 transition-all font-mono text-slate-700"
-                               />
-                             </td>
-                             <td className="px-8 py-5">
-                               <div className="relative">
-                                 <select 
-                                   value={m.status}
-                                   onChange={(e) => handleMachineStateChange(m, e.target.value as any)}
-                                   className={cn(
-                                     "w-44 bg-slate-50 border rounded-xl px-4 py-2 text-[10px] font-bold transition-all appearance-none cursor-pointer tracking-widest shadow-sm",
-                                     m.status === 'Running' ? 'border-brand-success/20 text-brand-success' : 
-                                     m.status === 'Idle' ? 'border-brand-warning/20 text-brand-warning' : 'border-brand-danger/20 text-brand-danger'
-                                   )}
-                                 >
-                                   <option value="Running">STATE_RUNNING</option>
-                                   <option value="Idle">STATE_IDLE</option>
-                                   <option value="Breakdown">STATE_BREAKDOWN</option>
-                                 </select>
-                                 <ChevronDown size={14} className="absolute right-4 top-1/2 -translate-y-1/2 opacity-30" />
-                               </div>
-                             </td>
-                             <td className="px-8 py-5">
-                               <div className="relative min-w-[200px]">
-                                 <select 
-                                   value={m.reason}
-                                   onChange={(e) => {
-                                     const val = e.target.value;
-                                     setMachines(prev => prev.map(mach => mach.id === m.id ? { ...mach, reason: val } : mach));
-                                     updateMachineStatus(m.id, { reason: val });
-                                   }}
-                                   disabled={m.status === 'Running'}
-                                   className={cn(
-                                     "w-full bg-slate-50 border rounded-xl px-4 py-2 text-xs transition-all appearance-none cursor-pointer font-medium pr-10 shadow-sm",
-                                     m.status === 'Running' 
-                                       ? 'opacity-35 cursor-not-allowed border-slate-200 text-slate-400' 
-                                       : 'opacity-100 hover:border-slate-300 focus:border-brand-primary/50 border-slate-200 text-slate-700'
-                                   )}
-                                 >
-                                   {m.status === 'Running' ? (
-                                     <option value="NO_ALERTS">NO_ALERTS</option>
-                                   ) : m.status === 'Idle' ? (
-                                     <>
-                                       {m.reason && masterStore.idleReasons && !masterStore.idleReasons.includes(m.reason) && (
-                                         <option value={m.reason}>{m.reason}</option>
-                                       )}
-                                       {(masterStore.idleReasons || []).map((reasonOpt: string) => (
-                                         <option key={reasonOpt} value={reasonOpt}>{reasonOpt}</option>
-                                       ))}
-                                     </>
-                                   ) : (
-                                     <>
-                                       {m.reason && masterStore.breakdownReasons && !masterStore.breakdownReasons.includes(m.reason) && (
-                                         <option value={m.reason}>{m.reason}</option>
-                                       )}
-                                       {(masterStore.breakdownReasons || []).map((reasonOpt: string) => (
-                                         <option key={reasonOpt} value={reasonOpt}>{reasonOpt}</option>
-                                       ))}
-                                     </>
-                                   )}
-                                 </select>
-                                 {m.status !== 'Running' && (
-                                   <ChevronDown size={14} className="absolute right-4 top-1/2 -translate-y-1/2 opacity-30" />
-                                 )}
-                               </div>
-                             </td>
+                   <div className="overflow-x-auto">
+                     <table className="w-full text-left border-collapse">
+                       <thead>
+                         <tr className="border-b border-slate-100 bg-slate-50/50">
+                           <th className="px-8 py-5 text-[10px] font-bold text-slate-400 uppercase tracking-widest">MACHINE ID</th>
+                           <th className="px-8 py-5 text-[10px] font-bold text-slate-400 uppercase tracking-widest">TARGET (KG)</th>
+                           <th className="px-8 py-5 text-[10px] font-bold text-slate-400 uppercase tracking-widest">CURRENT STATE</th>
+                           <th className="px-8 py-5 text-[10px] font-bold text-slate-400 uppercase tracking-widest">REASON</th>
+                           <th className="px-8 py-5 text-[10px] font-bold text-slate-400 uppercase tracking-widest">NUMBER OF IDLE</th>
+                           <th className="px-8 py-5 text-[10px] font-bold text-slate-400 uppercase tracking-widest">NUMBER OF BREAKDOWN</th>
+                           <th className="px-8 py-5 text-[10px] font-bold text-slate-400 uppercase tracking-widest">IDLE TIME</th>
+                           <th className="px-8 py-5 text-[10px] font-bold text-slate-400 uppercase tracking-widest">BREAKDOWN TIME</th>
+                         </tr>
+                       </thead>
+                       <tbody className="divide-y divide-slate-50">
+                         {machines.map((m) => (
+                            <tr key={m.id} className="hover:bg-slate-50/50 transition-colors group">
+                              <td className="px-8 py-5">
+                                <p className="font-bold text-slate-900 tracking-tight">{m.id}</p>
+                                <p className="text-[10px] text-slate-400 font-mono tracking-tighter">NODE-00{m.id.split('-')[1] || 'X'}</p>
+                              </td>
+                              <td className="px-8 py-5">
+                                <input 
+                                  type="number" 
+                                  defaultValue={m.target || ""}
+                                  placeholder="Input Target"
+                                  onBlur={(e) => updateMachineStatus(m.id, { target: e.target.value ? Number(e.target.value) : 0 })}
+                                  className="w-32 bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm focus:ring-2 focus:ring-brand-primary/20 focus:border-brand-primary/50 transition-all font-mono text-slate-700 placeholder:text-slate-400 placeholder:font-sans placeholder:text-[10px]"
+                                />
+                              </td>
+                              <td className="px-8 py-5">
+                                <div className="relative">
+                                  <select 
+                                    value={m.status}
+                                    onChange={(e) => handleMachineStateChange(m, e.target.value as any)}
+                                    className={cn(
+                                      "w-44 bg-slate-50 border rounded-xl px-4 py-2 text-[10px] font-bold transition-all appearance-none cursor-pointer tracking-widest shadow-sm",
+                                      m.status === 'Running' ? 'border-brand-success/20 text-brand-success' : 
+                                      m.status === 'Idle' ? 'border-brand-warning/20 text-brand-warning' : 'border-brand-danger/20 text-brand-danger'
+                                    )}
+                                  >
+                                    <option value="Running">STATE_RUNNING</option>
+                                    <option value="Idle">STATE_IDLE</option>
+                                    <option value="Breakdown">STATE_BREAKDOWN</option>
+                                  </select>
+                                  <ChevronDown size={14} className="absolute right-4 top-1/2 -translate-y-1/2 opacity-30" />
+                                </div>
+                              </td>
+                              <td className="px-8 py-5">
+                                <div className="relative min-w-[200px]">
+                                  <select 
+                                    value={m.reason || ""}
+                                    onChange={(e) => {
+                                      const val = e.target.value;
+                                      handleReasonChange(m, val);
+                                    }}
+                                    disabled={m.status === 'Running'}
+                                    className={cn(
+                                      "w-full bg-slate-50 border rounded-xl px-4 py-2 text-xs transition-all appearance-none cursor-pointer font-medium pr-10 shadow-sm",
+                                      m.status === 'Running' 
+                                        ? 'opacity-35 cursor-not-allowed border-slate-200 text-slate-400' 
+                                        : 'opacity-100 hover:border-slate-300 focus:border-brand-primary/50 border-slate-200 text-slate-700'
+                                    )}
+                                  >
+                                    {m.status === 'Running' ? (
+                                      <option value="NO_ALERTS">NO_ALERTS</option>
+                                    ) : m.status === 'Idle' ? (
+                                      <>
+                                        <option value="" disabled>Select Reason</option>
+                                        {m.reason && m.reason !== "" && masterStore.idleReasons && !masterStore.idleReasons.includes(m.reason) && (
+                                          <option value={m.reason}>{m.reason}</option>
+                                        )}
+                                        {(masterStore.idleReasons || []).map((reasonOpt: string) => (
+                                          <option key={reasonOpt} value={reasonOpt}>{reasonOpt}</option>
+                                        ))}
+                                      </>
+                                    ) : (
+                                      <>
+                                        <option value="" disabled>Select Reason</option>
+                                        {m.reason && m.reason !== "" && masterStore.breakdownReasons && !masterStore.breakdownReasons.includes(m.reason) && (
+                                          <option value={m.reason}>{m.reason}</option>
+                                        )}
+                                        {(masterStore.breakdownReasons || []).map((reasonOpt: string) => (
+                                          <option key={reasonOpt} value={reasonOpt}>{reasonOpt}</option>
+                                        ))}
+                                      </>
+                                    )}
+                                  </select>
+                                  {m.status !== 'Running' && (
+                                    <ChevronDown size={14} className="absolute right-4 top-1/2 -translate-y-1/2 opacity-30" />
+                                  )}
+                                </div>
+                              </td>
                              <td className="px-8 py-5">
                                <input 
                                  type="number" 
@@ -1649,15 +1779,14 @@ export default function App() {
                                  return (
                                    <div className="flex items-center gap-1.5">
                                      <div className={cn(
-                                       "px-3 py-1.5 rounded-xl font-mono text-xs font-bold transition-all flex items-center gap-1 w-24 justify-center border",
+                                       "px-3 py-1.5 rounded-xl font-mono text-xs font-bold transition-all flex items-center gap-1.5 min-w-[100px] justify-center border shadow-sm",
                                        isActive 
                                          ? "bg-amber-50 text-amber-600 border-amber-200 ring-2 ring-amber-100/50" 
                                          : "bg-slate-50 text-slate-600 border-slate-200/80"
                                      )}>
                                        {isActive && <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />}
-                                       <span>{displayingTime.toFixed(3)}</span>
+                                       <span>{formatMachineDuration(displayingTime)}</span>
                                      </div>
-                                     <span className="text-[10px] text-slate-400 font-bold uppercase font-mono">hrs</span>
                                    </div>
                                  );
                                })()}
@@ -1675,15 +1804,14 @@ export default function App() {
                                  return (
                                    <div className="flex items-center gap-1.5">
                                      <div className={cn(
-                                       "px-3 py-1.5 rounded-xl font-mono text-xs font-bold transition-all flex items-center gap-1 w-24 justify-center border",
+                                       "px-3 py-1.5 rounded-xl font-mono text-xs font-bold transition-all flex items-center gap-1.5 min-w-[100px] justify-center border shadow-sm",
                                        isActive 
                                          ? "bg-rose-50 text-rose-600 border-rose-200 ring-2 ring-rose-100/50" 
                                          : "bg-slate-50 text-slate-600 border-slate-200/80"
                                      )}>
                                        {isActive && <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse" />}
-                                       <span>{displayingTime.toFixed(3)}</span>
+                                       <span>{formatMachineDuration(displayingTime)}</span>
                                      </div>
-                                     <span className="text-[10px] text-slate-400 font-bold uppercase font-mono">hrs</span>
                                    </div>
                                  );
                                })()}
@@ -1733,24 +1861,28 @@ export default function App() {
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-50">
-                        {[1, 2, 3, 4, 5, 8, 9].map((i) => (
-                           <tr key={i} className="hover:bg-slate-50 transition-colors group cursor-pointer">
+                        {filteredRecords.length === 0 ? (
+                           <tr>
+                              <td colSpan={7} className="px-8 py-10 text-center text-slate-400 font-bold uppercase tracking-widest text-[10px]">No operational logs found for selected date</td>
+                           </tr>
+                        ) : filteredRecords.map((record: any, i: number) => (
+                           <tr key={record.RollID || i} className="hover:bg-slate-50 transition-colors group cursor-pointer">
                              <td className="px-8 py-5">
-                               <p className="font-mono text-xs text-brand-primary font-bold tracking-widest">R-174{i}2-26</p>
+                               <p className="font-mono text-xs text-brand-primary font-bold tracking-widest">{record.RollID}</p>
                              </td>
                              <td className="px-8 py-5">
-                               <p className="text-sm font-bold text-slate-700 uppercase">17 MAY 2026</p>
-                               <p className="text-[10px] text-slate-400 font-mono tracking-tighter">09:{20 + i}:42 AM</p>
+                               <p className="text-sm font-bold text-slate-700 uppercase">{record.ProductionDate}</p>
+                               <p className="text-[10px] text-slate-400 font-mono tracking-tighter">{record.DataUpdateTime || 'N/A'}</p>
                              </td>
                              <td className="px-8 py-5">
-                               <span className="px-3 py-1 rounded bg-white border border-slate-200 text-[10px] font-bold text-slate-500 font-mono">EXT-0{i % 4 + 2}</span>
+                               <span className="px-3 py-1 rounded bg-white border border-slate-200 text-[10px] font-bold text-slate-500 font-mono">{record.MachineNo}</span>
                              </td>
                              <td className="px-8 py-5">
-                               <p className="text-xs font-bold text-slate-700">OP-50{i}</p>
-                               <p className="text-[10px] text-slate-500">{i % 2 === 0 ? 'John Resnick' : 'Sarah Connor'}</p>
+                               <p className="text-xs font-bold text-slate-700">{record.OperatorID}</p>
+                               <p className="text-[10px] text-slate-500">{record.OperatorName}</p>
                              </td>
-                             <td className="px-8 py-5 text-[10px] font-bold text-slate-400 tracking-widest">COMMERCIAL</td>
-                             <td className="px-8 py-5 text-right font-mono font-bold text-sm text-slate-900">{340 + i * 15}.20</td>
+                             <td className="px-8 py-5 text-[10px] font-bold text-slate-400 tracking-widest">{record.ProductionType?.toUpperCase() || 'PRODUCTION'}</td>
+                             <td className="px-8 py-5 text-right font-mono font-bold text-sm text-slate-900">{record.FinishedKgs}</td>
                              <td className="px-8 py-5">
                                <div className="flex justify-center">
                                  <div className="w-2.5 h-2.5 bg-brand-success rounded-full shadow-[0_0_12px_rgba(5,150,105,0.2)]" />
@@ -1759,14 +1891,14 @@ export default function App() {
                            </tr>
                         ))}
                       </tbody>
+                      <tfoot className="border-t border-slate-100">
+                        <tr>
+                           <td colSpan={7} className="p-6 text-[10px] font-bold uppercase tracking-widest text-slate-400">
+                              RECORDS_STREAM: <span className="text-slate-900 font-mono">{filteredRecords.length} / {productionRecords.length} ENTRIES</span>
+                           </td>
+                        </tr>
+                      </tfoot>
                     </table>
-                  </div>
-                  <div className="p-6 border-t border-slate-100 flex items-center justify-between text-[10px] font-bold uppercase tracking-widest text-slate-400">
-                    <p>RECORDS_STREAM: <span className="text-slate-900 font-mono">5 / 1,240 ENTRIES</span></p>
-                    <div className="flex gap-4">
-                       <button className="px-4 py-2 rounded-xl border border-slate-200 hover:bg-slate-50 hover:text-slate-900 transition-all font-bold">PREVIOUS_SET</button>
-                       <button className="px-4 py-2 rounded-xl border border-slate-200 hover:bg-slate-50 hover:text-slate-900 transition-all font-bold">NEXT_SET</button>
-                    </div>
                   </div>
                 </div>
               </motion.div>
@@ -1906,6 +2038,23 @@ export default function App() {
                 </div>
               </motion.div>
             )}
+            {activeTab === 'breakdown-data' && (
+              <motion.div 
+                key="breakdown-data"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                className="space-y-6"
+              >
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="text-xl font-display font-black text-slate-900 uppercase">Breakdown Data</h3>
+                    <p className="text-sm text-slate-500 font-medium tracking-tight">Machine downtime and operational interruptions</p>
+                  </div>
+                </div>
+                <BreakdownDataTable machines={machines} dateFilter={dashboardDateFilter || getShiftAndDateForDhaka().productionDate} />
+              </motion.div>
+            )}
             {activeTab === 'master-production-record' && (
               <motion.div 
                 key="master-records"
@@ -1935,25 +2084,38 @@ export default function App() {
 
                 {/* Search field for old database entries */}
                 <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex flex-col md:flex-row gap-4 items-center justify-between">
-                  <div className="relative w-full md:max-w-md">
-                    <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
-                    <input
-                      type="text"
-                      placeholder="Search records by Roll ID, Operator, Machine, PI, Material..."
-                      value={recordSearchQuery}
-                      onChange={(e) => setRecordSearchQuery(e.target.value)}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-10 py-2.5 text-xs text-slate-950 placeholder:text-slate-400 focus:outline-none focus:ring-4 focus:ring-brand-primary/20 focus:border-brand-primary focus:bg-brand-primary/5 transition-all font-semibold"
-                    />
-                    {recordSearchQuery && (
-                      <button 
-                        onClick={() => setRecordSearchQuery("")}
-                        className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-[10px] font-black uppercase tracking-wider"
-                      >
-                        Clear
-                      </button>
-                    )}
+                  <div className="flex flex-col sm:flex-row items-center gap-3 w-full flex-1">
+                    <div className="relative w-full md:max-w-md">
+                      <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
+                      <input
+                        type="text"
+                        placeholder="Search records by Roll ID, Operator, Machine, PI, Material..."
+                        value={recordSearchQuery}
+                        onChange={(e) => setRecordSearchQuery(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-10 py-2.5 text-xs text-slate-950 placeholder:text-slate-400 focus:outline-none focus:ring-4 focus:ring-brand-primary/20 focus:border-brand-primary focus:bg-brand-primary/5 transition-all font-semibold"
+                      />
+                      {recordSearchQuery && (
+                        <button 
+                          onClick={() => setRecordSearchQuery("")}
+                          className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-[10px] font-black uppercase tracking-wider"
+                        >
+                          Clear
+                        </button>
+                      )}
+                    </div>
+                    <div className="relative flex items-center">
+                      <div className="absolute left-3.5 text-slate-400">
+                        <CalendarDays size={14} />
+                      </div>
+                      <input 
+                        type="date"
+                        value={dashboardDateFilter || currentProductionDateStr}
+                        onChange={(e) => setDashboardDateFilter(e.target.value)}
+                        className="bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-4 py-2.5 text-xs font-semibold text-slate-700 focus:outline-none focus:ring-4 focus:ring-brand-primary/20 focus:border-brand-primary focus:bg-brand-primary/5 transition-all w-[160px]"
+                      />
+                    </div>
                   </div>
-                  <div className="text-[10px] text-slate-500 font-black uppercase tracking-wider">
+                  <div className="text-[10px] text-slate-500 font-black uppercase tracking-wider shrink-0">
                     Showing <span className="text-brand-primary font-mono">{filteredRecords.length}</span> of <span className="font-mono">{productionRecords.length}</span> records
                   </div>
                 </div>
