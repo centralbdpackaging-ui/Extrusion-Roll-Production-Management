@@ -227,6 +227,9 @@ export default function App() {
     if (activeTab === 'breakdown-data') {
       fetchMachines();
     }
+    if (activeTab === 'master-production-record') {
+      fetchProductionRecords();
+    }
   }, [activeTab]);
 
   const handleGoogleSignIn = async () => {
@@ -630,6 +633,7 @@ export default function App() {
         
         fetchDashboard();
         fetchRecentEntries();
+        fetchProductionRecords();
         fetchNextRollId();
         fetchPreviousRollId();
         const nextShiftInfo = getShiftAndDateForDhaka();
