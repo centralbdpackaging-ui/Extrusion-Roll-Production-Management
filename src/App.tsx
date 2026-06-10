@@ -932,7 +932,7 @@ export default function App() {
               <MetricHead label="DAILY KG (COMBINED)" value={`${todayTotalKgs.toFixed(1)}`} unit="KG" color="text-brand-primary animate-pulse" />
               <MetricHead label="TARGET KG (TODAY)" value={`${totalTarget.toFixed(1)}`} unit="KG" />
               <MetricHead label="EFFICIENCY" value={efficiency} unit="%" color="text-brand-success" />
-              <MetricHead label="ACTIVE" value={`${machines.filter(m => m.status === 'Running').length}/${machines.length}`} unit="NODES" />
+              <MetricHead label="ACTIVE" value={`${machines.filter(m => m.status === 'Running').length}/${machines.length}`} unit="MACHINES" />
             </div>
             <div className="flex items-center gap-2">
               <button className="p-2.5 rounded-full bg-white border border-slate-200 text-slate-400 hover:text-slate-600 transition-all relative group shadow-sm">
@@ -1488,8 +1488,11 @@ export default function App() {
                                 <p className="font-mono text-xs font-black text-slate-900 tracking-tighter">{entry.RollID}</p>
                                 <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 border border-slate-200">{entry.MachineNo}</span>
                               </div>
-                              <div className="flex items-center gap-2">
-                                <p className="text-[10px] font-bold text-brand-primary">{entry.FinishedKgs} kg</p>
+                              <div className="flex items-center gap-3">
+                                <div className="flex flex-col items-end">
+                                  <p className="text-[10px] font-bold text-brand-primary">{entry.FinishedKgs} kg</p>
+                                  <p className="text-[10px] font-bold text-blue-500">{entry.FinishedMeter} m</p>
+                                </div>
                                 <button
                                   type="button"
                                   onClick={() => setEditingEntry({ ...entry })}
