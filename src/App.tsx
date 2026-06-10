@@ -37,6 +37,7 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn, formatDate, getShiftAndDateForDhaka, normalizeDateString } from './lib/utils';
+import ReportsPage from './components/ReportsPage';
 import BreakdownDataTable from './components/BreakdownDataTable';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, User } from 'firebase/auth';
@@ -148,7 +149,7 @@ const formatMachineDuration = (hoursNum: number): string => {
 };
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'entry' | 'dashboard' | 'history' | 'machines' | 'master-config' | 'operators' | 'master-production-record' | 'breakdown-data'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'entry' | 'dashboard' | 'history' | 'machines' | 'master-config' | 'operators' | 'master-production-record' | 'breakdown-data' | 'reports'>('dashboard');
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [dashboardDateFilter, setDashboardDateFilter] = useState<string>('');
   
@@ -227,7 +228,7 @@ export default function App() {
     if (activeTab === 'breakdown-data') {
       fetchMachines();
     }
-    if (activeTab === 'master-production-record') {
+    if (activeTab === 'master-production-record' || activeTab === 'reports') {
       fetchProductionRecords();
     }
   }, [activeTab]);
@@ -814,6 +815,12 @@ export default function App() {
             label="LOGBOOK" 
             active={activeTab === 'history'} 
             onClick={() => setActiveTab('history')} 
+          />
+          <SidebarLink 
+            icon={<FileSpreadsheet size={18} />} 
+            label="REPORTS" 
+            active={activeTab === 'reports'} 
+            onClick={() => setActiveTab('reports')} 
           />
           <SidebarLink 
             icon={<AlertTriangle size={18} />} 
@@ -2386,6 +2393,17 @@ export default function App() {
                     </table>
                   </div>
                 </div>
+              </motion.div>
+            )}
+
+            {activeTab === 'reports' && (
+              <motion.div 
+                key="reports"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+              >
+                <ReportsPage productionRecords={productionRecords} />
               </motion.div>
             )}
           </AnimatePresence>
