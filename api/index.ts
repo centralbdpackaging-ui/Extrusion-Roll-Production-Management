@@ -725,6 +725,52 @@ const safeHandler = (fn: (req: any, res: any) => Promise<void>) => async (req: a
     res.json({ message: "Log created", id: docRef.id });
   }));
 
+  app.post("/api/utils/clear-breakdown", safeHandler(async (req, res) => {
+    const db = initializeFirebase();
+    if (!db) return res.status(500).json({ error: "No DB" });
+    
+    // Clear machine_logs
+    const logsSnap = await getDocs(collection(db, 'machine_logs'));
+    let batch = writeBatch(db);
+    let countLogs = 0;
+    logsSnap.docs.forEach(d => {
+      batch.delete(d.ref);
+      countLogs++;
+    });
+    
+    // Reset machines
+    const machinesSnap = await getDocs(collection(db, 'machines'));
+    machinesSnap.docs.forEach(d => {
+      batch.update(d.ref, {
+        status: "Running",
+        reason: "",
+        idleTime: 0,
+        breakdownTime: 0,
+        numIdle: 0,
+        numBreakdown: 0,
+        lastStatusChange: new Date().toISOString()
+      });
+    });
+
+    // Reset machine_daily_stats
+    const statsSnap = await getDocs(collection(db, 'machine_daily_stats'));
+    statsSnap.docs.forEach(d => {
+       batch.update(d.ref, {
+         target: 0,
+         idleTime: 0,
+         breakdownTime: 0,
+         numIdle: 0,
+         numBreakdown: 0
+       });
+    });
+    
+    if (countLogs > 0 || machinesSnap.docs.length > 0 || statsSnap.docs.length > 0) {
+       await batch.commit();
+    }
+    
+    res.json({ message: `Cleared ${countLogs} logs, reset machines and stats.` });
+  }));
+
   app.get("/api/dashboard", safeHandler(async (req, res) => {
     const db = initializeFirebase();
     const dateQuery = req.query.date as string;
