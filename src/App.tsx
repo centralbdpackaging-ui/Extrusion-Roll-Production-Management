@@ -268,7 +268,6 @@ export default function App() {
           fetchMachines(),
           fetchOperators(),
           fetchRecentEntries(),
-          fetchProductionRecords(),
           fetchNextRollId(),
           fetchPreviousRollId(),
           fetchMasterStore()
@@ -287,8 +286,8 @@ export default function App() {
       fetchRecentEntries();
       fetchNextRollId();
       fetchPreviousRollId();
-      fetchProductionRecords();
-    }, 30000); // Refresh every 30s
+      // fetchProductionRecords() is only called when mounting specific tabs to save quota
+    }, 300000); // Changed to 5 minutes to prevent Firestore quota exhaustion
     return () => clearInterval(interval);
   }, []);
 
@@ -329,12 +328,12 @@ export default function App() {
 
   const fetchRecentEntries = async () => {
     try {
-      const res = await fetch('/api/production');
+      const res = await fetch('/api/production/recent');
       const data = await res.json();
       if (res.ok && Array.isArray(data)) {
-        // Sort by timestamp descending and take last 50 for the Live Feed search pool
+        // Sort by timestamp descending
         const sorted = [...data].sort((a, b) => new Date(b.EntryTimestamp).getTime() - new Date(a.EntryTimestamp).getTime());
-        setRecentEntries(sorted.slice(0, 50));
+        setRecentEntries(sorted);
       } else {
         console.error("Production API error or non-array data:", data);
         setRecentEntries([]);
@@ -634,7 +633,9 @@ export default function App() {
         
         fetchDashboard();
         fetchRecentEntries();
-        fetchProductionRecords();
+        if (activeTab === 'master-production-record' || activeTab === 'reports') {
+          fetchProductionRecords();
+        }
         fetchNextRollId();
         fetchPreviousRollId();
         const nextShiftInfo = getShiftAndDateForDhaka();
@@ -687,9 +688,11 @@ export default function App() {
         setEditingEntry(null);
         await Promise.all([
           fetchDashboard(),
-          fetchRecentEntries(),
-          fetchProductionRecords()
+          fetchRecentEntries()
         ]);
+        if (activeTab === 'master-production-record' || activeTab === 'reports') {
+          fetchProductionRecords();
+        }
       } else {
         showToast(data.message || "Failed to update entry", 'error');
       }

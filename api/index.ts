@@ -349,20 +349,7 @@ const safeHandler = (fn: (req: any, res: any) => Promise<void>) => async (req: a
 
   const calculateNextRollId = async () => {
     const settings = await getRollSettings();
-    const masterData = await syncProductionRecords();
-
-    let lastNo = (settings as any).LAST_ROLL_NO;
-    if (masterData.length > 0) {
-      const rollNums = masterData.map((d: any) => {
-        if (typeof d.RollID === 'string') {
-          const parts = d.RollID.split('-');
-          if (parts.length === 3) return parseInt(parts[1]);
-        }
-        return 0;
-      });
-      const maxInDb = Math.max(...rollNums || [0]);
-      if (maxInDb > lastNo) lastNo = maxInDb;
-    }
+    let lastNo = (settings as any).LAST_ROLL_NO || 0;
     return `${(settings as any).PREFIX}-${lastNo + 1}-${(settings as any).CURRENT_YEAR}`;
   };
 
@@ -506,22 +493,16 @@ const safeHandler = (fn: (req: any, res: any) => Promise<void>) => async (req: a
 
   app.get("/api/previous-roll-id", safeHandler(async (req, res) => {
     const settings = await getRollSettings();
-    const masterData = await syncProductionRecords();
-    
-    let lastNo = (settings as any).LAST_ROLL_NO;
-    if (masterData.length > 0) {
-      const rollNums = masterData.map((d: any) => {
-        if (typeof d.RollID === 'string') {
-          const parts = d.RollID.split('-');
-          if (parts.length === 3) return parseInt(parts[1]);
-        }
-        return 0;
-      });
-      const maxInDb = Math.max(...rollNums || [0]);
-      if (maxInDb > lastNo) lastNo = maxInDb;
-    }
+    let lastNo = (settings as any).LAST_ROLL_NO || 0;
     const previousId = `${(settings as any).PREFIX}-${lastNo}-${(settings as any).CURRENT_YEAR}`;
     res.json({ previousId });
+  }));
+
+  app.get("/api/production/recent", safeHandler(async (req, res) => {
+    const db = initializeFirebase();
+    if (!db) return res.json([]);
+    const s = await getDocs(query(collection(db, 'production_records'), orderBy('EntryTimestamp', 'desc'), limit(50)));
+    res.json(s.docs.map(d => d.data()));
   }));
 
   app.get("/api/production", safeHandler(async (req, res) => {
@@ -826,10 +807,13 @@ const safeHandler = (fn: (req: any, res: any) => Promise<void>) => async (req: a
     });
 
     // Save/Sync to Firebase collection "dashboard_table"
+    // Optimization: disable auto-syncing every dashboard fetch to save DB quota
+    /* 
     await Promise.all(summary.map(async (row) => {
        const docRef = doc(db, 'dashboard_table', `${row.Date}_${row.MachineNo}`);
        await setDoc(docRef, row);
     }));
+    */
 
     res.json({
       summary,
