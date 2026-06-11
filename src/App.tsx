@@ -861,11 +861,11 @@ export default function App() {
                 <button 
                   type="button"
                   onClick={() => {
-                     try {
-                        window.print();
-                     } catch(e) {
-                         alert("Printing is blocked by your browser. Please try opening the app in a new tab.");
+                     if (window.self !== window.top) {
+                         alert("⚠️ The AI Studio Preview blocks direct printing.\n\nTo print this sticker, please open the application in a new browser tab.\n\nLook for the ↗ (diagonal arrow) icon at the top right of the Google AI Studio screen and click it.");
+                         return;
                      }
+                     window.print();
                   }}
                   className="w-full bg-brand-primary text-white py-3 rounded-xl font-bold uppercase tracking-widest flex items-center justify-center gap-2 hover:bg-brand-primary/90 transition-colors shadow-lg shadow-brand-primary/20"
                 >
@@ -886,104 +886,119 @@ export default function App() {
       {/* Sidebar */}
       <aside className={cn(
         "bg-white border-r border-brand-border flex flex-col z-50 overflow-hidden sticky top-0 h-screen sidebar-glow transition-all duration-300",
-        isSidebarOpen ? "w-64" : "w-0 border-r-0"
+        isSidebarOpen ? "w-64" : "w-0 sm:w-[5.5rem] border-r-0 sm:border-r"
       )}>
-        <div className="p-6 border-b border-brand-border flex items-center gap-3">
-          <div className="w-10 h-10 bg-brand-primary rounded-lg flex items-center justify-center shadow-lg shadow-brand-primary/20 relative">
+        <div className={cn("p-6 border-b border-brand-border flex items-center gap-3 transition-all", !isSidebarOpen && "sm:px-0 sm:justify-center p-4")}>
+          <div className="shrink-0 w-10 h-10 bg-brand-primary rounded-lg flex items-center justify-center shadow-lg shadow-brand-primary/20 relative">
             <Factory className="text-white" size={20} />
           </div>
-          <div>
-            <h1 className="font-display font-black text-xl leading-none tracking-tighter text-brand-primary">MAINETTI</h1>
-            <p className="text-[8px] text-slate-400 uppercase tracking-[0.3em] font-black mt-1">Industrial Systems</p>
-          </div>
+          {isSidebarOpen && (
+            <div className="whitespace-nowrap">
+              <h1 className="font-display font-black text-xl leading-none tracking-tighter text-brand-primary">MAINETTI</h1>
+              <p className="text-[8px] text-slate-400 uppercase tracking-[0.3em] font-black mt-1">Industrial Systems</p>
+            </div>
+          )}
         </div>
 
-        <nav className="flex-1 p-4 space-y-2 overflow-y-auto">
+        <nav className="flex-1 p-4 space-y-2 overflow-y-auto overflow-x-hidden">
           <SidebarLink 
             icon={<LayoutDashboard size={18} />} 
             label="DASHBOARD" 
             active={activeTab === 'dashboard'} 
             onClick={() => setActiveTab('dashboard')} 
+            isOpen={isSidebarOpen}
           />
           <SidebarLink 
             icon={<Layers size={18} />} 
             label="TARGET & MACHINES" 
             active={activeTab === 'machines'}
             onClick={() => setActiveTab('machines')}
+            isOpen={isSidebarOpen}
           />
           <SidebarLink 
             icon={<PlusCircle size={18} />} 
             label="ENTRY PORTAL" 
             active={activeTab === 'entry'} 
             onClick={() => setActiveTab('entry')} 
+            isOpen={isSidebarOpen}
           />
           <SidebarLink 
             icon={<History size={18} />} 
             label="LOGBOOK" 
             active={activeTab === 'history'} 
             onClick={() => setActiveTab('history')} 
+            isOpen={isSidebarOpen}
           />
           <SidebarLink 
             icon={<FileSpreadsheet size={18} />} 
             label="REPORTS" 
             active={activeTab === 'reports'} 
             onClick={() => setActiveTab('reports')} 
+            isOpen={isSidebarOpen}
           />
           <SidebarLink 
             icon={<AlertTriangle size={18} />} 
             label="BREAKDOWN DATA" 
             active={activeTab === 'breakdown-data'} 
             onClick={() => setActiveTab('breakdown-data')} 
+            isOpen={isSidebarOpen}
           />
           <div className="pt-6 pb-2">
-            <p className="px-4 text-[9px] font-bold text-slate-400 uppercase tracking-[0.2em] mb-2">MASTER DATA</p>
+            {isSidebarOpen && <p className="px-4 text-[9px] font-bold text-slate-400 uppercase tracking-[0.2em] mb-2 whitespace-nowrap">MASTER DATA</p>}
             <SidebarLink 
               icon={<Settings size={18} />} 
               label="MASTER TABLES" 
               active={activeTab === 'master-config'}
               onClick={() => setActiveTab('master-config')}
+              isOpen={isSidebarOpen}
             />
             <SidebarLink 
               icon={<Database size={18} />} 
               label="MASTER PRODUCTION RECORD" 
               active={activeTab === 'master-production-record'}
               onClick={() => setActiveTab('master-production-record')}
+              isOpen={isSidebarOpen}
             />
             <SidebarLink 
               icon={<Users size={18} />} 
               label="OPERATORS" 
               active={activeTab === 'operators'}
               onClick={() => setActiveTab('operators')}
+              isOpen={isSidebarOpen}
             />
           </div>
         </nav>
 
-        <div className="p-4 border-t border-brand-border space-y-3">
+        <div className={cn("p-4 border-t border-brand-border space-y-3", !isSidebarOpen && "px-2 pb-6")}>
           {user ? (
             <div className="space-y-3">
-              <div className="flex items-center gap-3 p-3 rounded-xl bg-indigo-50 border border-indigo-100 group transition-all">
-                <div className="w-8 h-8 rounded-full bg-white flex items-center justify-center overflow-hidden border border-indigo-200 shadow-sm">
+              <div className={cn("flex items-center gap-3 rounded-xl bg-indigo-50 border border-indigo-100 group transition-all", isSidebarOpen ? "p-3" : "p-2 justify-center")}>
+                <div className="shrink-0 w-8 h-8 rounded-full bg-white flex items-center justify-center overflow-hidden border border-indigo-200 shadow-sm">
                   {user.photoURL ? <img src={user.photoURL} alt="avatar" /> : <UserIcon size={16} className="text-indigo-400" />}
                 </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-[10px] font-black uppercase tracking-widest text-indigo-500">Connected</p>
-                  <p className="text-xs font-bold truncate text-slate-900">{user.displayName || 'User'}</p>
-                </div>
+                {isSidebarOpen && (
+                  <div className="flex-1 min-w-0">
+                    <p className="text-[10px] font-black uppercase tracking-widest text-indigo-500">Connected</p>
+                    <p className="text-xs font-bold truncate text-slate-900">{user.displayName || 'User'}</p>
+                  </div>
+                )}
               </div>
               <button 
                 onClick={handleSignOut}
-                className="w-full flex items-center justify-center gap-2 py-2 text-[10px] font-black uppercase tracking-widest text-rose-500 hover:bg-rose-50 rounded-lg transition-colors border border-transparent hover:border-rose-100"
+                className={cn("w-full flex items-center justify-center gap-2 py-2 text-[10px] font-black uppercase tracking-widest text-rose-500 hover:bg-rose-50 rounded-lg transition-colors border border-transparent hover:border-rose-100", !isSidebarOpen && "px-0")}
+                title={!isSidebarOpen ? "Disconnect Session" : undefined}
               >
-                <LogOut size={14} />
-                Disconnect Session
+                <LogOut size={14} className="shrink-0" />
+                {isSidebarOpen && "Disconnect Session"}
               </button>
             </div>
           ) : (
             <button 
               onClick={handleGoogleSignIn}
-              className="w-full flex items-center justify-center gap-3 p-3 rounded-xl bg-white border border-slate-200 group hover:border-brand-primary/30 transition-all shadow-sm"
+              className={cn("w-full flex items-center justify-center gap-3 rounded-xl bg-white border border-slate-200 group hover:border-brand-primary/30 transition-all shadow-sm", isSidebarOpen ? "p-3" : "py-3")}
+              title={!isSidebarOpen ? "User Login" : undefined}
             >
-              <div className="w-6 h-6 flex items-center justify-center">
+              <div className="shrink-0 w-6 h-6 flex items-center justify-center">
                 <svg viewBox="0 0 24 24" width="18" height="18" xmlns="http://www.w3.org/2000/svg">
                   <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
                   <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
@@ -991,7 +1006,7 @@ export default function App() {
                   <path d="M12 5.38c1.62 0 3.06.56 4.21 1.66l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
                 </svg>
               </div>
-              <span className="text-[10px] font-black uppercase tracking-widest text-slate-700">User Login</span>
+              {isSidebarOpen && <span className="text-[10px] font-black uppercase tracking-widest text-slate-700 whitespace-nowrap">User Login</span>}
             </button>
           )}
         </div>
@@ -2963,16 +2978,18 @@ export default function App() {
 }
 
 // Sub-components
-function SidebarLink({ icon, label, active, onClick }: { icon: React.ReactNode, label: string, active?: boolean, onClick?: () => void }) {
+function SidebarLink({ icon, label, active, onClick, isOpen = true }: { icon: React.ReactNode, label: string, active?: boolean, onClick?: () => void, isOpen?: boolean }) {
   return (
     <button 
       onClick={onClick}
       className={cn(
-        "w-full flex items-center gap-4 px-5 py-3.5 rounded-2xl transition-all group relative overflow-hidden",
+        "w-full flex items-center px-5 py-3.5 rounded-2xl transition-all group relative overflow-hidden",
+        isOpen ? "gap-4" : "justify-center",
         active 
           ? "bg-brand-primary/5 text-brand-primary font-bold shadow-sm" 
           : "text-slate-400 hover:bg-slate-50 hover:text-slate-700"
       )}
+      title={!isOpen ? label : undefined}
     >
       {active && (
         <motion.div 
@@ -2980,10 +2997,12 @@ function SidebarLink({ icon, label, active, onClick }: { icon: React.ReactNode, 
           className="absolute left-0 top-0 bottom-0 w-1.5 bg-brand-primary rounded-r-full"
         />
       )}
-      <span className={cn("transition-colors duration-300", active ? "text-brand-primary" : "group-hover:text-brand-primary")}>
+      <span className={cn("transition-colors duration-300 shrink-0", active ? "text-brand-primary" : "group-hover:text-brand-primary")}>
         {icon}
       </span>
-      <span className="text-[11px] font-bold tracking-widest uppercase">{label}</span>
+      {isOpen && (
+        <span className="text-[11px] font-bold tracking-widest uppercase whitespace-nowrap">{label}</span>
+      )}
     </button>
   );
 }
