@@ -33,10 +33,13 @@ import {
   FileSpreadsheet,
   Search,
   Edit3,
-  X
+  X,
+  Printer,
+  QrCode
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn, formatDate, getShiftAndDateForDhaka, normalizeDateString } from './lib/utils';
+import { QRCodeSVG } from 'qrcode.react';
 import ReportsPage from './components/ReportsPage';
 import BreakdownDataTable from './components/BreakdownDataTable';
 import { initializeApp } from 'firebase/app';
@@ -203,12 +206,19 @@ export default function App() {
   const [newMasterItem, setNewMasterItem] = useState("");
   const [editingEntry, setEditingEntry] = useState<any | null>(null);
   const [isSavingEdit, setIsSavingEdit] = useState(false);
+  const [printEntry, setPrintEntry] = useState<any | null>(null);
   const [recordSearchQuery, setRecordSearchQuery] = useState("");
   const [feedSearchQuery, setFeedSearchQuery] = useState("");
   
   const [user, setUser] = useState<User | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
   const [tick, setTick] = useState(0);
+
+  useEffect(() => {
+    const afterPrint = () => setPrintEntry(null);
+    window.addEventListener('afterprint', afterPrint);
+    return () => window.removeEventListener('afterprint', afterPrint);
+  }, []);
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -296,7 +306,13 @@ export default function App() {
       const res = await fetch('/api/master-store');
       const data = await res.json();
       if (res.ok) {
-        setMasterStore((prev: any) => ({ ...prev, ...data }));
+        const cleanedData = { ...data };
+        for (const key of Object.keys(cleanedData)) {
+          if (Array.isArray(cleanedData[key])) {
+            cleanedData[key] = Array.from(new Set(cleanedData[key]));
+          }
+        }
+        setMasterStore((prev: any) => ({ ...prev, ...cleanedData }));
       }
     } catch (err) {
       console.error("Failed to fetch master store", err);
@@ -778,7 +794,95 @@ export default function App() {
   const metricsFeed = recentEntries.slice(0, 7);
 
   return (
-    <div className="min-h-screen flex text-slate-800 industrial-grid">
+    <>
+      {printEntry && (
+        <div className="fixed inset-0 z-[9999] bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4 print:bg-transparent print:p-0">
+          <div className="bg-white rounded-2xl p-6 shadow-2xl max-w-md w-full print:p-0 print:shadow-none print:rounded-none">
+            <h2 className="text-lg font-bold text-slate-800 mb-4 print:hidden flex items-center justify-between">
+              Sticker Preview
+              <button 
+                type="button" 
+                onClick={() => setPrintEntry(null)} 
+                className="p-2 bg-slate-100/50 hover:bg-slate-100 rounded-full text-slate-400 hover:text-slate-600 transition-colors"
+                title="Close Window"
+              >
+                <X size={16} />
+              </button>
+            </h2>
+
+            <div className="w-[3in] h-[2in] p-2 bg-white m-0 text-black mx-auto overflow-hidden text-center relative border border-slate-200 print:border-none flex flex-col justify-between" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>
+              <div className="flex justify-between items-stretch gap-2 h-full">
+                {/* Left side: QR Code and Roll ID */}
+                <div className="flex flex-col items-center justify-center w-[45%] border-[2px] border-black p-1 h-full bg-white relative">
+                  <QRCodeSVG value={printEntry.RollID} size={70} level="H" />
+                  <span className="text-sm font-black mt-2 leading-none tracking-tighter text-center pt-2 border-t-[2px] border-black w-full absolute bottom-1.5">{printEntry.RollID}</span>
+                </div>
+                {/* Right side: Information */}
+                <div className="w-[55%] flex flex-col justify-between h-full space-y-1">
+                  <div className="flex justify-between items-end border-[2px] border-black p-[5px] bg-slate-50 border-b-[3px]">
+                     <div className="flex flex-col text-left">
+                        <span className="text-[7px] font-bold uppercase text-slate-500 leading-none mb-[3px] tracking-widest font-mono">Weight</span>
+                        <span className="text-xl font-black leading-none tracking-tighter">{printEntry.FinishedKgs}<span className="text-[10px] font-bold ml-0.5">KG</span></span>
+                     </div>
+                     <div className="flex flex-col text-right">
+                        <span className="text-[7px] font-bold uppercase text-slate-500 leading-none mb-[3px] tracking-widest font-mono">Length</span>
+                        <span className="text-xl font-black leading-none tracking-tighter">{printEntry.FinishedMeter}<span className="text-[10px] font-bold ml-0.5">m</span></span>
+                     </div>
+                  </div>
+                  <div className="flex justify-between items-start border-[2px] border-black p-1">
+                     <div className="flex flex-col text-left">
+                        <span className="text-[7px] font-bold uppercase text-slate-500 leading-[8px] tracking-widest font-mono">Machine</span>
+                        <span className="text-xs font-black leading-tight uppercase truncate max-w-[65px]">{printEntry.MachineNo}</span>
+                     </div>
+                     <div className="flex flex-col text-right">
+                        <span className="text-[7px] font-bold uppercase text-slate-500 leading-[8px] tracking-widest font-mono">Material</span>
+                        <span className="text-xs font-black leading-tight uppercase truncate max-w-[65px]">{printEntry.Material}</span>
+                     </div>
+                  </div>
+                  <div className="grid grid-cols-1 gap-0.5 text-left border-[2px] border-black p-1 bg-white font-mono object-contain flex-col justify-between flex-1">
+                    <div className="flex justify-between border-b border-gray-300 pb-0.5">
+                      <span className="text-[7px] font-bold uppercase text-slate-500">PI/Yr:</span>
+                      <span className="text-[8px] font-black text-black uppercase">{printEntry.PINumber} / {printEntry.Year}</span>
+                    </div>
+                    <div className="flex justify-between border-b border-gray-300 pb-0.5">
+                      <span className="text-[7px] font-bold uppercase text-slate-500">Opr:</span>
+                      <span className="text-[8px] font-bold text-black uppercase truncate max-w-[90px]">{printEntry.OperatorID} - {printEntry.OperatorName?.split(" ")[0]}</span>
+                    </div>
+                    <div className="flex justify-between items-end">
+                      <span className="text-[7px] font-bold uppercase text-slate-500">Date/Shift:</span>
+                      <span className="text-[8px] font-bold text-black uppercase whitespace-nowrap">{new Date(printEntry.EntryTimestamp).toLocaleDateString()} {printEntry.Shift}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-6 flex flex-col gap-3 print:hidden">
+                <button 
+                  type="button"
+                  onClick={() => {
+                     try {
+                        window.print();
+                     } catch(e) {
+                         alert("Printing is blocked by your browser. Please try opening the app in a new tab.");
+                     }
+                  }}
+                  className="w-full bg-brand-primary text-white py-3 rounded-xl font-bold uppercase tracking-widest flex items-center justify-center gap-2 hover:bg-brand-primary/90 transition-colors shadow-lg shadow-brand-primary/20"
+                >
+                  <Printer size={18} />
+                  Print Sticker Now
+                </button>
+            </div>
+            
+            {window.self !== window.top && (
+               <p className="text-[10px] text-rose-500 font-bold mt-4 text-center print:hidden border border-rose-100 bg-rose-50 p-2 rounded-lg">
+                 Note: If the print window does not appear, your browser might be blocking it in this preview window. Please open the app in a new tab using the <span className="text-slate-800 font-black px-1 border border-slate-200 bg-white rounded mx-1 pb-0.5">&nearr;</span> icon at the top right of the screen.
+               </p>
+            )}
+          </div>
+        </div>
+      )}
+      <div className={cn("min-h-screen flex text-slate-800 industrial-grid", printEntry ? "print:hidden" : "")}>
       {/* Sidebar */}
       <aside className={cn(
         "bg-white border-r border-brand-border flex flex-col z-50 overflow-hidden sticky top-0 h-screen sidebar-glow transition-all duration-300",
@@ -1496,14 +1600,24 @@ export default function App() {
                                   <p className="text-[10px] font-bold text-brand-primary">{entry.FinishedKgs} kg</p>
                                   <p className="text-[10px] font-bold text-blue-500">{entry.FinishedMeter} m</p>
                                 </div>
-                                <button
-                                  type="button"
-                                  onClick={() => setEditingEntry({ ...entry })}
-                                  className="p-1.5 rounded-md hover:bg-slate-100 text-slate-400 hover:text-brand-primary transition-all flex items-center justify-center cursor-pointer"
-                                  title="Edit entry"
-                                >
-                                  <Edit3 size={12} />
-                                </button>
+                                <div className="flex items-center gap-1">
+                                  <button
+                                    type="button"
+                                    onClick={() => setPrintEntry({ ...entry })}
+                                    className="p-1.5 rounded-md hover:bg-slate-100 text-slate-400 hover:text-indigo-500 transition-all flex items-center justify-center cursor-pointer shadow-sm border border-transparent hover:border-slate-200 bg-white"
+                                    title="Print Sticker"
+                                  >
+                                    <Printer size={12} />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setEditingEntry({ ...entry })}
+                                    className="p-1.5 rounded-md hover:bg-slate-100 text-slate-400 hover:text-brand-primary transition-all flex items-center justify-center cursor-pointer shadow-sm border border-transparent hover:border-slate-200 bg-white"
+                                    title="Edit entry"
+                                  >
+                                    <Edit3 size={12} />
+                                  </button>
+                                </div>
                               </div>
                             </div>
                             
@@ -2359,7 +2473,16 @@ export default function App() {
                       <tbody className="divide-y divide-slate-50">
                         {filteredRecords.map((record, idx) => (
                           <tr key={record.RollID || idx} className="hover:bg-slate-50/50 transition-colors group">
-                            <td className="px-4 py-3 text-center sticky left-0 bg-white group-hover:bg-slate-50/80 z-10 border-r border-slate-200 shadow-sm">
+                            <td className="px-4 py-3 text-center sticky left-0 bg-white group-hover:bg-slate-50/80 z-10 border-r border-slate-200 shadow-sm whitespace-nowrap">
+                              <button
+                                type="button"
+                                onClick={() => setPrintEntry({ ...record })}
+                                className="mr-2 inline-flex items-center gap-1.5 px-3 py-1.5 bg-indigo-50 hover:bg-indigo-500 text-indigo-600 hover:text-white rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all duration-200 cursor-pointer shadow-sm hover:shadow-indigo-500/20"
+                                title="Print Sticker"
+                              >
+                                <Printer size={11} />
+                                Print
+                              </button>
                               <button
                                 type="button"
                                 onClick={() => setEditingEntry({ ...record })}
@@ -2460,8 +2583,9 @@ export default function App() {
                       onChange={(e) => setNewMasterItem(e.target.value)}
                       onKeyDown={async (e) => {
                         if (e.key === 'Enter') {
+                          if (!newMasterItem) return;
                           const key = modalConfig.type;
-                          const updated = { ...masterStore, [key]: [...masterStore[key], newMasterItem] };
+                          const updated = { ...masterStore, [key]: Array.from(new Set([...masterStore[key], newMasterItem])) };
                           setMasterStore(updated);
                           await fetch('/api/master-store', {
                             method: 'POST',
@@ -2481,7 +2605,7 @@ export default function App() {
                       onClick={async () => {
                         if (!newMasterItem) return;
                         const key = modalConfig.type;
-                        const updated = { ...masterStore, [key]: [...masterStore[key], newMasterItem] };
+                        const updated = { ...masterStore, [key]: Array.from(new Set([...masterStore[key], newMasterItem])) };
                         setMasterStore(updated);
                         await fetch('/api/master-store', {
                           method: 'POST',
@@ -2834,6 +2958,7 @@ export default function App() {
         )}
       </AnimatePresence>
     </div>
+    </>
   );
 }
 
@@ -3064,8 +3189,8 @@ function SelectField({ label, name, icon, options = [], placeholder, value, onCh
     setSearchQuery(value || '');
   }, [value]);
 
-  const filteredOptions = (options || []).filter((opt: string) =>
-    opt ? opt.toLowerCase().includes(searchQuery.toLowerCase()) : false
+  const filteredOptions = Array.from(new Set(options || [])).filter((opt: any) =>
+    opt ? String(opt).toLowerCase().includes(searchQuery.toLowerCase()) : false
   );
 
   // Reset focused index when query or filtered options change
