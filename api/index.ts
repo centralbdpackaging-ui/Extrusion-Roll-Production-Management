@@ -1,7 +1,7 @@
 import express from "express";
 import path from "path";
 import fs from "fs";
-import { syncToGoogleSheets } from "./google_sheets.js";
+import { syncToGoogleSheets, syncMultipleToGoogleSheets } from "./google_sheets.js";
 import { initializeApp, getApp, getApps } from "firebase/app";
 import { 
   getFirestore, 
@@ -509,6 +509,20 @@ const safeHandler = (fn: (req: any, res: any) => Promise<void>) => async (req: a
   app.get("/api/production", safeHandler(async (req, res) => {
     const masterData = await syncProductionRecords();
     res.json(masterData);
+  }));
+
+  app.post("/api/sync-all-sheets", safeHandler(async (req, res) => {
+    const db = initializeFirebase();
+    const recordsSnapshot = await getDocs(
+      query(collection(db, "production_records"), orderBy("EntryTimestamp", "asc"))
+    );
+    const records = recordsSnapshot.docs.map(doc => doc.data());
+    
+    if (records.length > 0) {
+      await syncMultipleToGoogleSheets(records);
+    }
+    
+    res.json({ message: `Sent ${records.length} records to Google Sheets syncing mechanism.` });
   }));
 
   app.post("/api/production", safeHandler(async (req, res) => {
