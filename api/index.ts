@@ -551,10 +551,14 @@ const safeHandler = (fn: (req: any, res: any) => Promise<void>) => async (req: a
       ProductionMonth: date.toLocaleString('default', { month: 'long' })
     };
     
-    await addDoc(collection(db, 'production_records'), newEntry);
+    const cleanEntry = Object.fromEntries(
+      Object.entries(newEntry).filter(([_, v]) => v !== undefined)
+    );
+    
+    await addDoc(collection(db, 'production_records'), cleanEntry);
 
     // Sync to Google Sheets using the service account credential
-    await syncToGoogleSheets(newEntry);
+    await syncToGoogleSheets(cleanEntry);
 
     res.status(201).json({ 
       message: "Production Entry Saved Successfully", 
