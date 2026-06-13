@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { cn } from '../lib/utils';
 import { getShiftAndDateForDhaka } from '../lib/utils';
-import { ChevronDown, ChevronUp, Clock } from 'lucide-react';
+import { ChevronDown, ChevronUp, Clock, CloudUpload } from 'lucide-react';
 
 interface MachineMaster {
   id: string;
@@ -27,9 +27,37 @@ interface MachineLog {
   endTime: string;
 }
 
-export default function BreakdownDataTable({ machines, dateFilter }: { machines: MachineMaster[], dateFilter: string }) {
+export default function BreakdownDataTable({ 
+  machines, 
+  dateFilter, 
+  showToast 
+}: { 
+  machines: MachineMaster[]; 
+  dateFilter: string; 
+  showToast?: (msg: string, type: 'success' | 'error' | 'info') => void; 
+}) {
   const [logs, setLogs] = useState<MachineLog[]>([]);
   const [statusFilter, setStatusFilter] = useState('All');
+  const [isSyncing, setIsSyncing] = useState(false);
+
+  const syncAllToGoogleSheets = async () => {
+    setIsSyncing(true);
+    try {
+      if (showToast) showToast('Starting breakdown data sync to Google Sheets...', 'info');
+      const res = await fetch('/api/sync-all-breakdown-sheets', { method: 'POST' });
+      const data = await res.json();
+      if (res.ok) {
+        if (showToast) showToast('Successfully synced breakdown logs to Google Sheets.', 'success');
+      } else {
+        throw new Error(data.error || 'Failed to sync');
+      }
+    } catch (error: any) {
+      console.error(error);
+      if (showToast) showToast(error.message, 'error');
+    } finally {
+      setIsSyncing(false);
+    }
+  };
 
   useEffect(() => {
     fetch('/api/machine-logs')
@@ -43,47 +71,38 @@ export default function BreakdownDataTable({ machines, dateFilter }: { machines:
   }, []);
 
   const combinedData = useMemo(() => {
-    const list: typeof logs = [...logs];
-    
-    // Add current active downtime so it's visible before status change
-    machines.forEach(m => {
-       if (m.status !== 'Running' && m.lastStatusChange) {
-          const startTime = new Date(m.lastStatusChange).getTime();
-          const durationHrs = Math.max(0, (Date.now() - startTime) / (1000 * 60 * 60));
-          const dateStr = getShiftAndDateForDhaka(new Date()).productionDate;
+    return logs.map(lg => {
+      const isCurrent = lg.endTime === 'Ongoing' || lg.endTime === 'Now';
+      const durationHrs = isCurrent
+        ? Math.max(0, (Date.now() - new Date(lg.startTime).getTime()) / (1000 * 60 * 60))
+        : Number(lg.durationHrs || 0);
 
-          list.push({
-             id: `current-${m.id}`,
-             machineId: m.id,
-             date: dateStr,
-             status: m.status,
-             reason: m.reason || 'Ongoing...',
-             durationHrs: durationHrs,
-             startTime: m.lastStatusChange,
-             endTime: 'Now'
-          });
-       }
-    });
-
-    return list.filter(lg => {
-       const dateMatch = dateFilter === '' || lg.date === dateFilter;
-       const statusMatch = statusFilter === 'All' || lg.status === statusFilter;
-       return dateMatch && statusMatch;
+      return {
+        ...lg,
+        isCurrent,
+        durationHrs
+      };
+    }).filter(lg => {
+      const dateMatch = dateFilter === '' || lg.date === dateFilter;
+      const statusMatch = statusFilter === 'All' || lg.status === statusFilter;
+      return dateMatch && statusMatch;
     }).sort((a, b) => new Date(b.startTime).getTime() - new Date(a.startTime).getTime());
-  }, [logs, machines, dateFilter, statusFilter]);
+  }, [logs, dateFilter, statusFilter]);
 
   return (
     <div className="w-full">
       <div className="flex gap-4 mb-4 flex-wrap">
-        <select 
-          value={statusFilter} 
-          onChange={(e) => setStatusFilter(e.target.value)}
-          className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary/20"
-        >
-          <option value="All">All Events</option>
-          <option value="Idle">Idle</option>
-          <option value="Breakdown">Breakdown</option>
-        </select>
+        <div>
+          <select 
+            value={statusFilter} 
+            onChange={(e) => setStatusFilter(e.target.value)}
+            className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary/20"
+          >
+            <option value="All">All Events</option>
+            <option value="Idle">Idle</option>
+            <option value="Breakdown">Breakdown</option>
+          </select>
+        </div>
       </div>
       <div className="overflow-x-auto">
         <table className="w-full text-left border-collapse bg-white shadow-sm border border-slate-100 rounded-xl">
@@ -110,7 +129,7 @@ export default function BreakdownDataTable({ machines, dateFilter }: { machines:
               combinedData.map((ev, i) => {
                 const mac = machines.find(m => m.id === ev.machineId);
                 const target = mac ? mac.target : '--';
-                const isCurrent = ev.endTime === 'Now';
+                const isCurrent = ev.isCurrent;
 
                 return (
                   <tr key={ev.id || i} className={cn("hover:bg-slate-50/50 transition-colors", isCurrent && "bg-orange-50/30")}>

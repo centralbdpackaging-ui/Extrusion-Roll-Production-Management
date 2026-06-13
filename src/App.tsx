@@ -90,6 +90,8 @@ interface MachineSummary {
   BreakdownDurationMins: number;
   IdleNoOfTimes: number;
   IdleDurationMins: number;
+  LastUpdate?: string;
+  Reason?: string;
 }
 
 interface MachineMaster {
@@ -428,23 +430,6 @@ export default function App() {
         updates.breakdownTime = Number(((m.breakdownTime || 0) + elapsedHours).toFixed(3));
       }
 
-      // Log the old state to machine_logs if it was Idle or Breakdown
-      if ((oldStatus === 'Idle' || oldStatus === 'Breakdown') && elapsedHours > 0.001) {
-        fetch('/api/machine-logs', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            machineId: m.id,
-            date: getShiftAndDateForDhaka(new Date(parentNow)).productionDate,
-            status: oldStatus,
-            reason: m.reason || 'Unspecified',
-            durationHrs: elapsedHours,
-            startTime: lastChangeStr,
-            endTime: parentNow
-          })
-        }).catch(err => console.error("Failed to log machine state", err));
-      }
-
       // Update locally immediately
       setMachines(prev => prev.map(mach => mach.id === m.id ? { ...mach, ...updates } : mach));
 
@@ -501,23 +486,6 @@ export default function App() {
         updates.idleTime = Number(((m.idleTime || 0) + elapsedHours).toFixed(3));
       } else if (oldStatus === 'Breakdown') {
         updates.breakdownTime = Number(((m.breakdownTime || 0) + elapsedHours).toFixed(3));
-      }
-
-      // Log the old state to machine_logs if it was Idle or Breakdown
-      if ((oldStatus === 'Idle' || oldStatus === 'Breakdown') && elapsedHours > 0.001) {
-        fetch('/api/machine-logs', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            machineId: m.id,
-            date: getShiftAndDateForDhaka(new Date(parentNow)).productionDate,
-            status: oldStatus,
-            reason: m.reason || 'Unspecified',
-            durationHrs: elapsedHours,
-            startTime: lastChangeStr,
-            endTime: parentNow
-          })
-        }).catch(err => console.error("Failed to log machine state", err));
       }
 
       // 2. Increment counters when entering a new state
@@ -2206,7 +2174,7 @@ export default function App() {
                     <p className="text-sm text-slate-500 font-medium tracking-tight">Machine downtime and operational interruptions</p>
                   </div>
                 </div>
-                <BreakdownDataTable machines={machines} dateFilter={dashboardDateFilter || getShiftAndDateForDhaka().productionDate} />
+                <BreakdownDataTable machines={machines} dateFilter={dashboardDateFilter || getShiftAndDateForDhaka().productionDate} showToast={showToast} />
               </motion.div>
             )}
             {activeTab === 'master-production-record' && (
@@ -3205,7 +3173,7 @@ function SelectField({ label, name, icon, options = [], placeholder, value, onCh
       if (filteredOptions.length > 0) {
         const indexToSelect = (focusedIndex >= 0 && focusedIndex < filteredOptions.length) ? focusedIndex : 0;
         const selectedValue = filteredOptions[indexToSelect];
-        handleSelect(selectedValue);
+        handleSelect(selectedValue as string);
         
         // Auto-navigate to next field
         setTimeout(() => {
