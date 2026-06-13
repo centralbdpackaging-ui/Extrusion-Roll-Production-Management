@@ -1,6 +1,7 @@
 import express from "express";
 import path from "path";
 import fs from "fs";
+import { syncToGoogleSheets } from "./google_sheets.js";
 import { initializeApp, getApp, getApps } from "firebase/app";
 import { 
   getFirestore, 
@@ -538,10 +539,30 @@ const safeHandler = (fn: (req: any, res: any) => Promise<void>) => async (req: a
     
     await addDoc(collection(db, 'production_records'), newEntry);
 
+    // Sync to Google Sheets using the service account credential
+    await syncToGoogleSheets(newEntry);
+
     res.status(201).json({ 
       message: "Production Entry Saved Successfully", 
       entry: newEntry 
     });
+
+    // Cleanup data older than 48 hours from Firestore
+    (async () => {
+      try {
+         const twoDaysAgo = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
+         const oldQuery = query(collection(db, 'production_records'), where('EntryTimestamp', '<', twoDaysAgo));
+         const oldDocs = await getDocs(oldQuery);
+         if (!oldDocs.empty) {
+            const batch = writeBatch(db);
+            oldDocs.docs.forEach(d => batch.delete(d.ref));
+            await batch.commit();
+            console.log(`Cleaned up ${oldDocs.docs.length} old records from Firestore.`);
+         }
+      } catch (err) {
+         console.error('Failed to cleanup old records:', err);
+      }
+    })();
   }));
 
   app.post("/api/utils/normalize-dates", safeHandler(async (req, res) => {
