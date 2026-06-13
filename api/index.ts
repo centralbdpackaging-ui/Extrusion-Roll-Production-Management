@@ -550,7 +550,10 @@ const safeHandler = (fn: (req: any, res: any) => Promise<void>) => async (req: a
 
         // Transition INTO a downtime -> create new ongoing log instantly
         if (status === 'Idle' || status === 'Breakdown') {
-          const finalReason = reason !== undefined ? reason : (oldMachine.reason || 'Unspecified');
+          let finalReason = reason !== undefined ? reason : (oldMachine.reason || 'Unspecified');
+          if (!finalReason || finalReason === "") {
+            finalReason = 'Unspecified';
+          }
           const finalDate = date || getShiftAndDateForDhaka(new Date()).productionDate;
           const newLog = {
             machineId: id,
@@ -564,16 +567,51 @@ const safeHandler = (fn: (req: any, res: any) => Promise<void>) => async (req: a
           await addDoc(collection(db, 'machine_logs'), newLog);
         }
       } else if (reason !== undefined && reason !== oldReason && (oldStatus === 'Idle' || oldStatus === 'Breakdown')) {
-        // Machine remains in downtime, but only the reason is changed
+        // Machine remains in downtime, but the reason is changed
+        // 1. Finalize any existing ongoing logs for the OLD reason
         const ongoingQuery = query(
           collection(db, 'machine_logs'), 
           where('machineId', '==', id), 
           where('endTime', '==', 'Ongoing')
         );
         const ongoingSnapshot = await getDocs(ongoingQuery);
+        const nowStr = lastStatusChange || new Date().toISOString();
+
         for (const logDoc of ongoingSnapshot.docs) {
-          await updateDoc(logDoc.ref, { reason });
+          const logData = logDoc.data();
+          const startTimeStr = logData.startTime;
+          
+          // Calculate duration for this slice
+          const elapsedMs = new Date(nowStr).getTime() - new Date(startTimeStr).getTime();
+          const elapsedHours = Number(Math.max(0, elapsedMs / (1000 * 60 * 60)).toFixed(3));
+
+          const updatedLog = {
+            endTime: nowStr,
+            durationHrs: elapsedHours
+          };
+
+          await updateDoc(logDoc.ref, updatedLog);
+
+          // Sync finalized log to Google Sheets automatically!
+          await syncMachineLogToGoogleSheets({
+            ...logData,
+            ...updatedLog
+          });
         }
+
+        // 2. Start a new ongoing log for the NEW reason
+        const finalReason = reason !== "" ? reason : 'Unspecified';
+        const finalDate = date || getShiftAndDateForDhaka(new Date()).productionDate;
+        const newLog = {
+          machineId: id,
+          date: finalDate,
+          status: oldStatus,
+          reason: finalReason,
+          durationHrs: 0,
+          startTime: nowStr,
+          endTime: 'Ongoing'
+        };
+        await addDoc(collection(db, 'machine_logs'), newLog);
       }
       
       // Update daily stats if a date is provided
