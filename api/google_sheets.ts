@@ -25,6 +25,138 @@ if (!auth) {
   });
 }
 
+export function cleanPi(pi: string): string {
+  if (!pi) return '';
+  let str = pi.trim().toLowerCase();
+  
+  // Drop "mpbl" prefix if it exists to allow matching raw numbers to full codes
+  str = str.replace(/^mpbl\s*[\/\-_]?\s*/, '');
+  
+  // Replace leading zeroes in any sequence of numbers (e.g. 04894 -> 4894, or leading 0s preceeded by non-digit or boundary)
+  str = str.replace(/(^|[^0-9])0+(\d+)/g, '$1$2');
+
+  str = str.replace(/[^a-z0-9]/g, '');
+  return str;
+}
+
+export function getMatchedDetails(piDetailsMap: Map<string, { retailer: string, customer: string }>, piVal: string): { retailer: string, customer: string } {
+  if (!piVal) return { retailer: '', customer: '' };
+  
+  // Try original exact uppercase first
+  const upper = piVal.trim().toUpperCase();
+  if (piDetailsMap.has(upper)) {
+    return piDetailsMap.get(upper)!;
+  }
+  
+  // Try cleaned/normalized key mapping
+  const clean = cleanPi(piVal);
+  if (piDetailsMap.has(clean)) {
+    return piDetailsMap.get(clean)!;
+  }
+  
+  // Try extracting the base number sequence (e.g. "4894" from "MPBL/04894/2026")
+  const baseMatch = piVal.match(/MPBL\/0*(\d+)/i) || piVal.match(/0*(\d+)/);
+  if (baseMatch) {
+    const base = baseMatch[1];
+    if (piDetailsMap.has(base)) {
+      return piDetailsMap.get(base)!;
+    }
+  }
+  
+  return { retailer: '', customer: '' };
+}
+
+export async function getPendingOrderDetailsMap(sheets: any, spreadsheetId: string): Promise<Map<string, { retailer: string, customer: string }>> {
+  const map = new Map<string, { retailer: string, customer: string }>();
+  try {
+    const res = await sheets.spreadsheets.values.get({
+      spreadsheetId,
+      range: 'Pending Orders!A1:C50000'
+    });
+    const values = res.data.values;
+    if (values && values.length > 1) {
+      for (let i = 1; i < values.length; i++) {
+        const row = values[i];
+        if (!row || row.length === 0) continue;
+        const pi = String(row[0] || '').trim();
+        if (pi) {
+          const details = {
+            retailer: String(row[1] || '').trim(),
+            customer: String(row[2] || '').trim()
+          };
+          // Store multiple key formats for maximum matching success
+          map.set(pi.toUpperCase(), details);
+          map.set(cleanPi(pi), details);
+          
+          // Also set base number if possible (e.g. "4894")
+          const baseMatch = pi.match(/MPBL\/0*(\d+)/i) || pi.match(/0*(\d+)/);
+          if (baseMatch) {
+            map.set(baseMatch[1], details);
+          }
+        }
+      }
+    }
+  } catch (err: any) {
+    console.error("Error reading details map from Pending Orders sheet:", err.message);
+  }
+  return map;
+}
+
+export async function getPendingOrderDetailsMapDirect(): Promise<Map<string, { retailer: string, customer: string }>> {
+  try {
+    const drive = google.drive({ version: 'v3', auth });
+    const sheets = google.sheets({ version: 'v4', auth });
+
+    let spreadsheetId = null;
+    const query = 'name="Production Records (Lifetime)" and mimeType="application/vnd.google-apps.spreadsheet" and trashed=false';
+    const searchRes = await drive.files.list({
+      q: query,
+      fields: 'files(id, name)'
+    });
+
+    if (searchRes.data.files && searchRes.data.files.length > 0) {
+      spreadsheetId = searchRes.data.files[0].id;
+    }
+
+    if (!spreadsheetId) {
+      return new Map();
+    }
+
+    return await getPendingOrderDetailsMap(sheets, spreadsheetId);
+  } catch (err: any) {
+    console.error("Error direct fetching details map:", err.message);
+    return new Map();
+  }
+}
+
+export async function getPendingOrderDetailsByPi(piNumber: string): Promise<{ retailer: string, customer: string }> {
+  try {
+    const drive = google.drive({ version: 'v3', auth });
+    const sheets = google.sheets({ version: 'v4', auth });
+
+    let spreadsheetId = null;
+    const query = 'name="Production Records (Lifetime)" and mimeType="application/vnd.google-apps.spreadsheet" and trashed=false';
+    const searchRes = await drive.files.list({
+      q: query,
+      fields: 'files(id, name)'
+    });
+
+    if (searchRes.data.files && searchRes.data.files.length > 0) {
+      spreadsheetId = searchRes.data.files[0].id;
+    }
+
+    if (!spreadsheetId) {
+      return { retailer: '', customer: '' };
+    }
+
+    const piDetailsMap = await getPendingOrderDetailsMap(sheets, spreadsheetId);
+    return getMatchedDetails(piDetailsMap, piNumber);
+  } catch (err: any) {
+    console.error("Error retrieving pending order details by PI:", err.message);
+    return { retailer: '', customer: '' };
+  }
+}
+
 export async function syncToGoogleSheets(entry: any) {
   try {
     const drive = google.drive({ version: 'v3', auth });
@@ -50,25 +182,47 @@ export async function syncToGoogleSheets(entry: any) {
     // Check if headers exist
     const headerRes = await sheets.spreadsheets.values.get({
        spreadsheetId,
-       range: 'A1:Z1'
+       range: 'A1:U1'
     });
+
+    const standardHeaders = ['Entry Timestamp', 'Roll ID', 'Date', 'Shift', 'Production Type', 'Operator ID', 'Operator Name', 'Machine No', 'Year', 'PI Number', 'Tube Size', 'UOM', 'Material', 'Micron', 'InLine Print', 'Finished Meter', 'Finished Kgs', 'Scrap Kgs', 'Roll Location', 'Retailer', 'Customer'];
 
     if (!headerRes.data.values || headerRes.data.values.length === 0) {
        // Add headers automatically
        await sheets.spreadsheets.values.update({
           spreadsheetId,
-          range: 'A1:Z1',
+          range: 'A1:U1',
           valueInputOption: 'USER_ENTERED',
           requestBody: {
-             values: [
-               ['Entry Timestamp', 'Roll ID', 'Date', 'Shift', 'Production Type', 'Operator ID', 'Operator Name', 'Machine No', 'Year', 'PI Number', 'Tube Size', 'UOM', 'Material', 'Micron', 'InLine Print', 'Finished Meter', 'Finished Kgs', 'Scrap Kgs', 'Roll Location']
-             ]
+             values: [standardHeaders]
           }
        });
+    } else {
+       // Check if Retailer and Customer headers already exist, if not, update header row to include them
+       const currentHeaders = headerRes.data.values[0] || [];
+       if (!currentHeaders.includes('Retailer') || !currentHeaders.includes('Customer')) {
+         const newHeaders = [...currentHeaders];
+         while (newHeaders.length < 19) {
+           newHeaders.push('');
+         }
+         newHeaders[19] = 'Retailer';
+         newHeaders[20] = 'Customer';
+         await sheets.spreadsheets.values.update({
+            spreadsheetId,
+            range: 'A1:U1',
+            valueInputOption: 'USER_ENTERED',
+            requestBody: {
+               values: [newHeaders]
+            }
+         });
+       }
     }
 
     // 3. Append row
     if (spreadsheetId) {
+      const piDetailsMap = await getPendingOrderDetailsMap(sheets, spreadsheetId);
+      const match = getMatchedDetails(piDetailsMap, entry.PINumber);
+
       const rowData = [
          entry.EntryTimestamp || new Date().toISOString(),
          entry.RollID || '',
@@ -88,7 +242,9 @@ export async function syncToGoogleSheets(entry: any) {
          entry.FinishedMeter || '',
          entry.FinishedKgs || '',
          entry.ScrapKgs || '',
-         entry.RollLocation || ''
+         entry.RollLocation || '',
+         match.retailer,
+         match.customer
       ];
       
       await sheets.spreadsheets.values.append({
@@ -133,46 +289,72 @@ export async function syncMultipleToGoogleSheets(entries: any[]) {
     // Check if headers exist
     const headerRes = await sheets.spreadsheets.values.get({
        spreadsheetId,
-       range: 'A1:Z1'
+       range: 'A1:U1'
     });
+
+    const standardHeaders = ['Entry Timestamp', 'Roll ID', 'Date', 'Shift', 'Production Type', 'Operator ID', 'Operator Name', 'Machine No', 'Year', 'PI Number', 'Tube Size', 'UOM', 'Material', 'Micron', 'InLine Print', 'Finished Meter', 'Finished Kgs', 'Scrap Kgs', 'Roll Location', 'Retailer', 'Customer'];
 
     if (!headerRes.data.values || headerRes.data.values.length === 0) {
        // Add headers automatically
        await sheets.spreadsheets.values.update({
           spreadsheetId,
-          range: 'A1:Z1',
+          range: 'A1:U1',
           valueInputOption: 'USER_ENTERED',
           requestBody: {
-             values: [
-               ['Entry Timestamp', 'Roll ID', 'Date', 'Shift', 'Production Type', 'Operator ID', 'Operator Name', 'Machine No', 'Year', 'PI Number', 'Tube Size', 'UOM', 'Material', 'Micron', 'InLine Print', 'Finished Meter', 'Finished Kgs', 'Scrap Kgs', 'Roll Location']
-             ]
+             values: [standardHeaders]
           }
        });
+    } else {
+       // Check if Retailer and Customer headers already exist, if not, update header row to include them
+       const currentHeaders = headerRes.data.values[0] || [];
+       if (!currentHeaders.includes('Retailer') || !currentHeaders.includes('Customer')) {
+         const newHeaders = [...currentHeaders];
+         while (newHeaders.length < 19) {
+           newHeaders.push('');
+         }
+         newHeaders[19] = 'Retailer';
+         newHeaders[20] = 'Customer';
+         await sheets.spreadsheets.values.update({
+            spreadsheetId,
+            range: 'A1:U1',
+            valueInputOption: 'USER_ENTERED',
+            requestBody: {
+               values: [newHeaders]
+            }
+         });
+       }
     }
 
     // 3. Append rows
     if (spreadsheetId && entries.length > 0) {
-      const rowsData = entries.map(entry => [
-         entry.EntryTimestamp || new Date().toISOString(),
-         entry.RollID || '',
-         entry.ProductionDate || '',
-         entry.Shift || '',
-         entry.ProductionType || '',
-         entry.OperatorID || '',
-         entry.OperatorName || '',
-         entry.MachineNo || '',
-         entry.Year || '',
-         entry.PINumber || '',
-         entry.TubeSize || '',
-         entry.UOM || '',
-         entry.Material || '',
-         entry.Micron || '',
-         entry.InLinePrint || '',
-         entry.FinishedMeter || '',
-         entry.FinishedKgs || '',
-         entry.ScrapKgs || '',
-         entry.RollLocation || ''
-      ]);
+      const piDetailsMap = await getPendingOrderDetailsMap(sheets, spreadsheetId);
+
+      const rowsData = entries.map(entry => {
+         const match = getMatchedDetails(piDetailsMap, entry.PINumber);
+         return [
+            entry.EntryTimestamp || new Date().toISOString(),
+            entry.RollID || '',
+            entry.ProductionDate || '',
+            entry.Shift || '',
+            entry.ProductionType || '',
+            entry.OperatorID || '',
+            entry.OperatorName || '',
+            entry.MachineNo || '',
+            entry.Year || '',
+            entry.PINumber || '',
+            entry.TubeSize || '',
+            entry.UOM || '',
+            entry.Material || '',
+            entry.Micron || '',
+            entry.InLinePrint || '',
+            entry.FinishedMeter || '',
+            entry.FinishedKgs || '',
+            entry.ScrapKgs || '',
+            entry.RollLocation || '',
+            match.retailer,
+            match.customer
+         ];
+      });
       
       await sheets.spreadsheets.values.append({
          spreadsheetId,
@@ -560,6 +742,9 @@ export async function syncUpdatedEntryToGoogleSheets(entry: any) {
     }
 
     // 3. Construct the entire row data to replace the old row
+    const piDetailsMap = await getPendingOrderDetailsMap(sheets, spreadsheetId);
+    const match = getMatchedDetails(piDetailsMap, entry.PINumber);
+
     const rowData = [
        entry.EntryTimestamp || new Date().toISOString(),
        entry.RollID || '',
@@ -579,13 +764,15 @@ export async function syncUpdatedEntryToGoogleSheets(entry: any) {
        entry.FinishedMeter || '',
        entry.FinishedKgs || '',
        entry.ScrapKgs || '',
-       entry.RollLocation || ''
+       entry.RollLocation || '',
+       match.retailer,
+       match.customer
     ];
 
-    // 4. Update the exact row range (e.g. A22:S22)
+    // 4. Update the exact row range (e.g. A22:U22)
     await sheets.spreadsheets.values.update({
        spreadsheetId,
-       range: `A${rowIndex}:S${rowIndex}`,
+       range: `A${rowIndex}:U${rowIndex}`,
        valueInputOption: 'USER_ENTERED',
        requestBody: {
           values: [rowData]

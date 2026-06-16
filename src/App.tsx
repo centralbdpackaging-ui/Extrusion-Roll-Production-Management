@@ -78,6 +78,8 @@ interface ProductionEntry {
   EnteredBy?: string;
   ProductionYear?: string;
   ProductionMonth?: string;
+  Retailer?: string;
+  Customer?: string;
 }
 
 interface MachineSummary {
@@ -1451,7 +1453,7 @@ export default function App() {
                         <SelectField label="Machine No" name="MachineNo" value={formData.MachineNo} onChange={handleInputChange} options={machines.map(m => m.id)} icon={<Container size={14} />} placeholder="Type Here" />
                         
                         <SelectField label="Year" name="Year" value={formData.Year} onChange={handleInputChange} options={masterStore.years} icon={<CalendarIcon size={14} />} placeholder="Type Here" clearable={false} />
-                        <InputField label="PI Number" name="PINumber" type="number" value={formData.PINumber} onChange={handleInputChange} icon={<Hash size={14} />} placeholder="Type Here" />
+                        <InputField label="PI Number" name="PINumber" value={formData.PINumber} onChange={handleInputChange} icon={<Hash size={14} />} placeholder="Type Here" />
                         <InputField label="Tube Size" name="TubeSize" type="number" step="0.01" value={formData.TubeSize} onChange={handleInputChange} icon={<Ruler size={14} />} placeholder="Type Here" />
                         
                         <SelectField label="UOM" name="UOM" value={formData.UOM} onChange={handleInputChange} options={masterStore.uoms} icon={<Ruler size={14} />} placeholder="Type Here" />
@@ -2426,7 +2428,7 @@ export default function App() {
                 {/* Google Sheets Sync Card */}
                 <div className="glass-panel overflow-hidden border-slate-200">
                   <div className="overflow-x-auto">
-                    <table className="w-full text-left border-collapse min-w-[2100px]">
+                    <table className="w-full text-left border-collapse min-w-[2300px]">
                       <thead>
                         <tr className="bg-slate-50 border-b border-slate-100">
                           <th className="px-4 py-4 text-[9px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap sticky left-0 bg-slate-50 z-10 border-r border-slate-200 shadow-sm text-center">Action</th>
@@ -2438,6 +2440,8 @@ export default function App() {
                           <th className="px-4 py-4 text-[9px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Machine No</th>
                           <th className="px-4 py-4 text-[9px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Year</th>
                           <th className="px-4 py-4 text-[9px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">PI Number</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Retailer</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Customer</th>
                           <th className="px-4 py-4 text-[9px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Tube Size</th>
                           <th className="px-4 py-4 text-[9px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">UOM</th>
                           <th className="px-4 py-4 text-[9px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Material</th>
@@ -2486,6 +2490,8 @@ export default function App() {
                             <td className="px-4 py-3 text-[11px] font-bold text-slate-900">{record.MachineNo}</td>
                             <td className="px-4 py-3 text-[11px] font-medium text-slate-900">{record.Year}</td>
                             <td className="px-4 py-3 text-[11px] font-medium text-slate-900">{record.PINumber || 'N/A'}</td>
+                            <td className="px-4 py-3 text-[11px] font-bold text-slate-800 bg-slate-50/40">{record.Retailer || 'N/A'}</td>
+                            <td className="px-4 py-3 text-[11px] font-bold text-slate-800 bg-slate-50/40">{record.Customer || 'N/A'}</td>
                             <td className="px-4 py-3 text-[11px] font-medium text-slate-900">{record.TubeSize} mm</td>
                             <td className="px-4 py-3 text-[11px] font-medium text-slate-900">{record.UOM}</td>
                             <td className="px-4 py-3 text-[11px] font-medium text-slate-900">{record.Material}</td>
@@ -2759,7 +2765,7 @@ export default function App() {
                     <div className="space-y-1">
                       <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">PI Number</label>
                       <input 
-                        type="number" 
+                        type="text" 
                         required
                         value={editingEntry.PINumber || ""} 
                         onChange={(e) => setEditingEntry({ ...editingEntry, PINumber: e.target.value })}

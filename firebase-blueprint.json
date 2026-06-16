@@ -100,7 +100,9 @@
         "OperatorName": { "type": "string" },
         "ScrapKgs": { "type": "number" },
         "ProductionYear": { "type": "string" },
-        "ProductionMonth": { "type": "string" }
+        "ProductionMonth": { "type": "string" },
+        "Retailer": { "type": "string" },
+        "Customer": { "type": "string" }
       }
     }
   },

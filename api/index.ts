@@ -1,7 +1,7 @@
 import express from "express";
 import path from "path";
 import fs from "fs";
-import { syncToGoogleSheets, syncMultipleToGoogleSheets, syncMachineLogToGoogleSheets, syncMultipleMachineLogsToGoogleSheets, syncDashboardToGoogleSheets, syncUpdatedEntryToGoogleSheets, uploadPendingOrdersToGoogleSheets, deletePendingOrdersFromGoogleSheets } from "./google_sheets.js";
+import { syncToGoogleSheets, syncMultipleToGoogleSheets, syncMachineLogToGoogleSheets, syncMultipleMachineLogsToGoogleSheets, syncDashboardToGoogleSheets, syncUpdatedEntryToGoogleSheets, uploadPendingOrdersToGoogleSheets, deletePendingOrdersFromGoogleSheets, getPendingOrderDetailsByPi, getPendingOrderDetailsMapDirect, getMatchedDetails, cleanPi } from "./google_sheets.js";
 import { initializeApp, getApp, getApps } from "firebase/app";
 import { 
   getFirestore, 
@@ -92,6 +92,52 @@ const initializeFirebase = () => {
     console.error("[Firebase] Init failed:", error.message);
   }
   return null;
+};
+
+const backfillRetailerCustomerInFirestore = async () => {
+  const db = initializeFirebase();
+  if (!db) return;
+  try {
+    const piDetailsMap = await getPendingOrderDetailsMapDirect();
+    if (piDetailsMap.size === 0) return;
+    
+    const recordsSnapshot = await getDocs(collection(db, "production_records"));
+    let batch = writeBatch(db);
+    let batchOperationCount = 0;
+    let updatedCount = 0;
+
+    for (const docSnap of recordsSnapshot.docs) {
+      const data = docSnap.data();
+      const piVal = data.PINumber || '';
+      if (piVal) {
+        const match = getMatchedDetails(piDetailsMap, piVal);
+        const currentRetailer = data.Retailer || '';
+        const currentCustomer = data.Customer || '';
+        
+        if (match.retailer !== currentRetailer || match.customer !== currentCustomer) {
+          batch.update(docSnap.ref, {
+            Retailer: match.retailer || '',
+            Customer: match.customer || ''
+          });
+          batchOperationCount++;
+          updatedCount++;
+          
+          if (batchOperationCount === 450) {
+            await batch.commit();
+            batch = writeBatch(db);
+            batchOperationCount = 0;
+          }
+        }
+      }
+    }
+    
+    if (batchOperationCount > 0) {
+      await batch.commit();
+    }
+    console.log(`[Backfill] Successfully updated ${updatedCount} records in Firestore with Retailer and Customer info.`);
+  } catch (err: any) {
+    console.error("[Backfill Error]:", err.message);
+  }
 };
 
 // Global Error Handler
@@ -708,6 +754,10 @@ const safeHandler = (fn: (req: any, res: any) => Promise<void>) => async (req: a
 
   app.post("/api/sync-all-sheets", safeHandler(async (req, res) => {
     const db = initializeFirebase();
+    
+    // First update Firestore with correct retailer/customer information
+    await backfillRetailerCustomerInFirestore();
+    
     const recordsSnapshot = await getDocs(
       query(collection(db, "production_records"), orderBy("EntryTimestamp", "asc"))
     );
@@ -719,6 +769,34 @@ const safeHandler = (fn: (req: any, res: any) => Promise<void>) => async (req: a
     
     res.json({ message: `Sent ${records.length} records to Google Sheets syncing mechanism.` });
   }));
+
+  const formatPINumber = (pi: any, year: any): string => {
+    if (!pi) return '';
+    const piStr = String(pi).trim();
+    const yearStr = String(year || new Date().getFullYear()).trim();
+
+    // Match patterns like 'MPBL/03500/2026' or 'mpbl/123/2022'
+    const regex = /^mpbl\/(\d+)\/(\d{4})$/i;
+    const match = piStr.match(regex);
+    if (match) {
+      const rawDigits = match[1];
+      const matchYear = match[2];
+      return `MPBL/${rawDigits.padStart(5, '0')}/${matchYear}`;
+    }
+
+    // Match if it's just raw digits (e.g. 3500)
+    if (/^\d+$/.test(piStr)) {
+      return `MPBL/${piStr.padStart(5, '0')}/${yearStr}`;
+    }
+
+    // Otherwise, clean characters and try to extract digits
+    const onlyDigits = piStr.replace(/\D/g, '');
+    if (onlyDigits) {
+      return `MPBL/${onlyDigits.padStart(5, '0')}/${yearStr}`;
+    }
+
+    return piStr.toUpperCase();
+  };
 
   app.post("/api/production", safeHandler(async (req, res) => {
     const db = initializeFirebase();
@@ -735,8 +813,14 @@ const safeHandler = (fn: (req: any, res: any) => Promise<void>) => async (req: a
     }
     
     const date = new Date(entry.ProductionDate || new Date());
+    const formattedPI = formatPINumber(entry.PINumber, entry.Year || date.getFullYear().toString());
+    const piDetails = await getPendingOrderDetailsByPi(formattedPI);
+
     const newEntry = {
       ...entry,
+      PINumber: formattedPI,
+      Retailer: piDetails.retailer || '',
+      Customer: piDetails.customer || '',
       RollID: newRollId,
       EntryTimestamp: new Date().toISOString(),
       DataUpdateTime: new Date().toLocaleString(),
@@ -917,10 +1001,27 @@ const safeHandler = (fn: (req: any, res: any) => Promise<void>) => async (req: a
     }
 
     const docId = snapshot.docs[0].id;
+    const originalData = snapshot.docs[0].data();
     const docRef = doc(db, 'production_records', docId);
 
     // Filter updates
     const cleanedUpdates: any = { ...updates };
+    if (updates.PINumber) {
+      const yearToUse = updates.Year || originalData.Year || new Date().getFullYear().toString();
+      cleanedUpdates.PINumber = formatPINumber(updates.PINumber, yearToUse);
+      
+      const piDetails = await getPendingOrderDetailsByPi(cleanedUpdates.PINumber);
+      cleanedUpdates.Retailer = piDetails.retailer || '';
+      cleanedUpdates.Customer = piDetails.customer || '';
+    } else if (updates.Year) {
+      const piToUse = originalData.PINumber;
+      const formatted = formatPINumber(piToUse, updates.Year);
+      cleanedUpdates.PINumber = formatted;
+      
+      const piDetails = await getPendingOrderDetailsByPi(formatted);
+      cleanedUpdates.Retailer = piDetails.retailer || '';
+      cleanedUpdates.Customer = piDetails.customer || '';
+    }
     if (updates.ProductionDate) {
       const date = new Date(updates.ProductionDate);
       cleanedUpdates.ProductionYear = date.getFullYear().toString();
@@ -974,6 +1075,11 @@ const safeHandler = (fn: (req: any, res: any) => Promise<void>) => async (req: a
       if (db) {
         const docRef = doc(db, 'pending_orders_info', 'current');
         await setDoc(docRef, uploadResult);
+        
+        // Asynchronously backfill Firestore in the background
+        backfillRetailerCustomerInFirestore().catch(err => {
+          console.error("Delayed backfill error after upload:", err.message);
+        });
       }
     }
     res.json(uploadResult);
@@ -1218,9 +1324,10 @@ const safeHandler = (fn: (req: any, res: any) => Promise<void>) => async (req: a
     }
   };
 
-  // Run initial sync after a short delay (10 seconds) on server startup
+  // Run initial sync and backfill after a short delay (10 seconds) on server startup
   setTimeout(() => {
-    console.log("[Auto-Sync] Running initial startup dashboard sync...");
+    console.log("[Auto-Sync] Running initial startup dashboard sync & firestore backfill...");
+    backfillRetailerCustomerInFirestore().catch(console.error);
     triggerDashboardSheetsSync().catch(console.error);
   }, 10000);
 
