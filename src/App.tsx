@@ -158,7 +158,7 @@ const formatMachineDuration = (hoursNum: number): string => {
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<'entry' | 'dashboard' | 'history' | 'machines' | 'master-config' | 'operators' | 'master-production-record' | 'breakdown-data' | 'reports'>('dashboard');
-  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [dashboardDateFilter, setDashboardDateFilter] = useState<string>('');
   
   // Calculate Bangladesh shift and operational production date
@@ -874,10 +874,14 @@ export default function App() {
       )}
       <div className={cn("min-h-screen flex text-slate-800 industrial-grid", printEntry ? "print:hidden" : "")}>
       {/* Sidebar */}
-      <aside className={cn(
-        "bg-white border-r border-brand-border flex flex-col z-50 overflow-hidden sticky top-0 h-screen sidebar-glow transition-all duration-300",
-        isSidebarOpen ? "w-64" : "w-0 sm:w-[5.5rem] border-r-0 sm:border-r"
-      )}>
+      <aside 
+        className={cn(
+          "bg-white border-r border-brand-border flex flex-col z-50 overflow-hidden sticky top-0 h-screen sidebar-glow transition-all duration-300",
+          isSidebarOpen ? "w-64" : "w-20"
+        )}
+        onMouseEnter={() => setIsSidebarOpen(true)}
+        onMouseLeave={() => setIsSidebarOpen(false)}
+      >
         <div className={cn("p-6 border-b border-brand-border flex items-center gap-3 transition-all", !isSidebarOpen && "sm:px-0 sm:justify-center p-4")}>
           <div className="shrink-0 w-10 h-10 bg-brand-primary rounded-lg flex items-center justify-center shadow-lg shadow-brand-primary/20 relative">
             <Factory className="text-white" size={20} />
@@ -920,17 +924,17 @@ export default function App() {
             isOpen={isSidebarOpen}
           />
           <SidebarLink 
-            icon={<FileSpreadsheet size={18} />} 
-            label="REPORTS" 
-            active={activeTab === 'reports'} 
-            onClick={() => setActiveTab('reports')} 
-            isOpen={isSidebarOpen}
-          />
-          <SidebarLink 
             icon={<AlertTriangle size={18} />} 
             label="BREAKDOWN DATA" 
             active={activeTab === 'breakdown-data'} 
             onClick={() => setActiveTab('breakdown-data')} 
+            isOpen={isSidebarOpen}
+          />
+          <SidebarLink 
+            icon={<FileSpreadsheet size={18} />} 
+            label="REPORTS" 
+            active={activeTab === 'reports'} 
+            onClick={() => setActiveTab('reports')} 
             isOpen={isSidebarOpen}
           />
           <div className="pt-6 pb-2">
@@ -944,7 +948,7 @@ export default function App() {
             />
             <SidebarLink 
               icon={<Database size={18} />} 
-              label="MASTER PRODUCTION RECORD" 
+              label="PRODUCTION RECORD" 
               active={activeTab === 'master-production-record'}
               onClick={() => setActiveTab('master-production-record')}
               isOpen={isSidebarOpen}
@@ -969,7 +973,7 @@ export default function App() {
 
       {/* Main Content */}
       <main className="flex-1 flex flex-col relative min-w-0">
-        <header className="h-16 bg-white/90 backdrop-blur-md border-b border-brand-border flex items-center justify-between px-8 sticky top-0 z-40 shadow-sm shadow-slate-100/50">
+        <header className="h-16 bg-white/90 backdrop-blur-md border-b border-brand-border flex items-center justify-between px-4 sticky top-0 z-40 shadow-sm shadow-slate-100/50">
           <div className="flex items-center gap-5">
             <button 
               onClick={() => setIsSidebarOpen(!isSidebarOpen)}
@@ -1021,7 +1025,7 @@ export default function App() {
           </div>
         </header>
 
-        <section className="flex-1 p-8 overflow-y-auto">
+        <section className="flex-1 p-4 overflow-y-auto">
           {fetchError && (
             <div className="mb-6 p-4 bg-rose-50 border border-rose-100 rounded-2xl flex items-center justify-between shadow-sm animate-in fade-in slide-in-from-top-2">
               <div className="flex items-center gap-3">
@@ -1360,7 +1364,7 @@ export default function App() {
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -10 }}
-                className="max-w-[1500px] mx-auto p-4 lg:p-6"
+                className="space-y-6"
               >
                 <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 items-start">
                   {/* Left Column: Form */}
@@ -1873,9 +1877,9 @@ export default function App() {
                                       m.status === 'Idle' ? 'border-brand-warning/20 text-brand-warning' : 'border-brand-danger/20 text-brand-danger'
                                     )}
                                   >
-                                    <option value="Running">STATE_RUNNING</option>
-                                    <option value="Idle">STATE_IDLE</option>
-                                    <option value="Breakdown">STATE_BREAKDOWN</option>
+                                    <option value="Running">RUNNING</option>
+                                    <option value="Idle">IDLE</option>
+                                    <option value="Breakdown">BREAKDOWN</option>
                                   </select>
                                   <ChevronDown size={14} className="absolute right-4 top-1/2 -translate-y-1/2 opacity-30" />
                                 </div>
@@ -2268,7 +2272,7 @@ export default function App() {
                       <Database size={22} />
                     </div>
                     <div>
-                      <h3 className="text-xl font-display font-black text-slate-900 uppercase">Master Production Record</h3>
+                      <h3 className="text-xl font-display font-black text-slate-900 uppercase">Production Record</h3>
                       <p className="text-sm text-slate-500 font-medium tracking-tight">Full historical database of all manufacturing cycles</p>
                     </div>
                   </div>
