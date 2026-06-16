@@ -412,22 +412,35 @@ export default function App() {
   const handleReasonChange = async (m: MachineMaster, newReason: string) => {
     try {
       const parentNow = new Date().toISOString();
-      
-      // Calculate elapsed time for the PREVIOUS reason
+      const oldReason = m.reason || '';
       const oldStatus = m.status;
-      const lastChangeStr = m.lastStatusChange || new Date().toISOString();
-      const elapsedMs = Date.now() - new Date(lastChangeStr).getTime();
-      const elapsedHours = Number(Math.max(0, elapsedMs / (1000 * 60 * 60)).toFixed(3)) || 0;
 
       const updates: Partial<MachineMaster> = {
         reason: newReason,
         lastStatusChange: parentNow
       };
 
-      if (oldStatus === 'Idle') {
-        updates.idleTime = Number(((m.idleTime || 0) + elapsedHours).toFixed(3));
-      } else if (oldStatus === 'Breakdown') {
-        updates.breakdownTime = Number(((m.breakdownTime || 0) + elapsedHours).toFixed(3));
+      // 1. If previously it did NOT have a reason (so reason was "" or "NO_ALERTS"):
+      //    We are STARTING the downtime now!
+      //    We must increment the event counter now.
+      if (oldReason === "" || oldReason === "NO_ALERTS") {
+        if (oldStatus === 'Idle') {
+          updates.numIdle = (m.numIdle || 0) + 1;
+        } else if (oldStatus === 'Breakdown') {
+          updates.numBreakdown = (m.numBreakdown || 0) + 1;
+        }
+      } else {
+        // Previously DID have a reason, so we are switching from one reason to another.
+        // We finalize the previous reason slice!
+        if (m.lastStatusChange) {
+          const elapsedMs = Date.now() - new Date(m.lastStatusChange).getTime();
+          const elapsedHours = Number(Math.max(0, elapsedMs / (1000 * 60 * 60)).toFixed(3)) || 0;
+          if (oldStatus === 'Idle') {
+            updates.idleTime = Number(((m.idleTime || 0) + elapsedHours).toFixed(3));
+          } else if (oldStatus === 'Breakdown') {
+            updates.breakdownTime = Number(((m.breakdownTime || 0) + elapsedHours).toFixed(3));
+          }
+        }
       }
 
       // Update locally immediately
@@ -440,7 +453,11 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: m.id, date: updateDateLoc, ...updates })
       });
-      if (!res.ok) {
+      if (res.ok) {
+        showToast("Reason updated successfully and saved everywhere", 'success');
+        fetchMachines();
+        fetchDashboard();
+      } else {
         showToast("Failed to change reason", 'error');
       }
     } catch (err) {
@@ -472,31 +489,35 @@ export default function App() {
     try {
       const parentNow = new Date().toISOString();
       const updates: Partial<MachineMaster> = {
-        status: newStatus,
-        lastStatusChange: parentNow
+        status: newStatus
       };
 
-      // 1. Calculate elapsed time in previous state if applicable
       const oldStatus = m.status;
-      const lastChangeStr = m.lastStatusChange || new Date().toISOString();
-      const elapsedMs = Date.now() - new Date(lastChangeStr).getTime();
-      const elapsedHours = Number(Math.max(0, elapsedMs / (1000 * 60 * 60)).toFixed(3)) || 0;
+      const oldReason = m.reason || '';
 
-      if (oldStatus === 'Idle') {
-        updates.idleTime = Number(((m.idleTime || 0) + elapsedHours).toFixed(3));
-      } else if (oldStatus === 'Breakdown') {
-        updates.breakdownTime = Number(((m.breakdownTime || 0) + elapsedHours).toFixed(3));
+      // 1. Calculate elapsed time in previous state if applicable (only if it was active/had a valid reason)
+      if (oldStatus === 'Idle' || oldStatus === 'Breakdown') {
+        if (oldReason !== "" && oldReason !== "NO_ALERTS" && m.lastStatusChange) {
+          const elapsedMs = Date.now() - new Date(m.lastStatusChange).getTime();
+          const elapsedHours = Number(Math.max(0, elapsedMs / (1000 * 60 * 60)).toFixed(3)) || 0;
+          if (oldStatus === 'Idle') {
+            updates.idleTime = Number(((m.idleTime || 0) + elapsedHours).toFixed(3));
+          } else if (oldStatus === 'Breakdown') {
+            updates.breakdownTime = Number(((m.breakdownTime || 0) + elapsedHours).toFixed(3));
+          }
+        }
       }
 
-      // 2. Increment counters when entering a new state
+      // 2. Clear reason and do NOT initialize lastStatusChange, nor increment event counter until a reason is chosen
       if (newStatus === 'Idle') {
-        updates.numIdle = (m.numIdle || 0) + 1;
         updates.reason = "";
+        updates.lastStatusChange = "";
       } else if (newStatus === 'Breakdown') {
-        updates.numBreakdown = (m.numBreakdown || 0) + 1;
         updates.reason = "";
+        updates.lastStatusChange = "";
       } else if (newStatus === 'Running') {
         updates.reason = 'NO_ALERTS';
+        updates.lastStatusChange = parentNow;
       }
 
       // Update locally immediately for snappy interface feedback

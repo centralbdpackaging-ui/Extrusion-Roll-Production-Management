@@ -1,7 +1,7 @@
 import express from "express";
 import path from "path";
 import fs from "fs";
-import { syncToGoogleSheets, syncMultipleToGoogleSheets, syncMachineLogToGoogleSheets, syncMultipleMachineLogsToGoogleSheets } from "./google_sheets.js";
+import { syncToGoogleSheets, syncMultipleToGoogleSheets, syncMachineLogToGoogleSheets, syncMultipleMachineLogsToGoogleSheets, syncDashboardToGoogleSheets, syncUpdatedEntryToGoogleSheets } from "./google_sheets.js";
 import { initializeApp, getApp, getApps } from "firebase/app";
 import { 
   getFirestore, 
@@ -425,6 +425,11 @@ const safeHandler = (fn: (req: any, res: any) => Promise<void>) => async (req: a
       lastStatusChange: new Date().toISOString()
     };
     await setDoc(doc(db, 'machines', id), newMachine);
+    
+    triggerDashboardSheetsSync().catch(err => {
+      console.error("[POST /api/machines Sync Error]:", err.message);
+    });
+
     res.json({ message: "Machine created successfully", machine: newMachine });
   }));
 
@@ -518,23 +523,82 @@ const safeHandler = (fn: (req: any, res: any) => Promise<void>) => async (req: a
       if (status && status !== oldStatus) {
         // Transition AWAY from downtime -> finalize the ongoing log
         if (oldStatus === 'Idle' || oldStatus === 'Breakdown') {
+          if (oldReason && oldReason !== "" && oldReason !== "NO_ALERTS") {
+            const ongoingQuery = query(
+              collection(db, 'machine_logs'), 
+              where('machineId', '==', id), 
+              where('endTime', '==', 'Ongoing')
+            );
+            const ongoingSnapshot = await getDocs(ongoingQuery);
+            for (const logDoc of ongoingSnapshot.docs) {
+              const logData = logDoc.data();
+              const startTimeStr = logData.startTime;
+              const endTimeStr = lastStatusChange || new Date().toISOString();
+              
+              // Calc duration
+              const elapsedMs = new Date(endTimeStr).getTime() - new Date(startTimeStr).getTime();
+              const elapsedHours = Number(Math.max(0, elapsedMs / (1000 * 60 * 60)).toFixed(3));
+
+              const updatedLog = {
+                endTime: endTimeStr,
+                durationHrs: elapsedHours
+              };
+
+              await updateDoc(logDoc.ref, updatedLog);
+
+              // Sync finalized log to Google Sheets automatically!
+              await syncMachineLogToGoogleSheets({
+                ...logData,
+                ...updatedLog,
+                id: logDoc.id
+              });
+            }
+          }
+        }
+
+        // Transition INTO a downtime -> create new ongoing log instantly (ONLY IF reason is selected!)
+        if (status === 'Idle' || status === 'Breakdown') {
+          let finalReason = reason !== undefined ? reason : (oldMachine.reason || '');
+          if (finalReason && finalReason !== "" && finalReason !== "NO_ALERTS") {
+            const finalDate = date || getShiftAndDateForDhaka(new Date()).productionDate;
+            const newLog = {
+              machineId: id,
+              date: finalDate,
+              status: status,
+              reason: finalReason,
+              durationHrs: 0,
+              startTime: lastStatusChange || new Date().toISOString(),
+              endTime: 'Ongoing'
+            };
+            const docRef = await addDoc(collection(db, 'machine_logs'), newLog);
+            await syncMachineLogToGoogleSheets({
+              ...newLog,
+              id: docRef.id
+            });
+          }
+        }
+      } else if (reason !== undefined && reason !== oldReason && (oldStatus === 'Idle' || oldStatus === 'Breakdown')) {
+        // Machine remains in downtime, but the reason is changed (or is being set for the first time!)
+        // 1. Finalize any existing ongoing logs for the OLD reason
+        if (oldReason && oldReason !== "" && oldReason !== "NO_ALERTS") {
           const ongoingQuery = query(
             collection(db, 'machine_logs'), 
             where('machineId', '==', id), 
             where('endTime', '==', 'Ongoing')
           );
           const ongoingSnapshot = await getDocs(ongoingQuery);
+          const nowStr = lastStatusChange || new Date().toISOString();
+
           for (const logDoc of ongoingSnapshot.docs) {
             const logData = logDoc.data();
             const startTimeStr = logData.startTime;
-            const endTimeStr = lastStatusChange || new Date().toISOString();
             
-            // Calc duration
-            const elapsedMs = new Date(endTimeStr).getTime() - new Date(startTimeStr).getTime();
+            // Calculate duration for this slice
+            const elapsedMs = new Date(nowStr).getTime() - new Date(startTimeStr).getTime();
             const elapsedHours = Number(Math.max(0, elapsedMs / (1000 * 60 * 60)).toFixed(3));
 
             const updatedLog = {
-              endTime: endTimeStr,
+              endTime: nowStr,
               durationHrs: elapsedHours
             };
 
@@ -543,75 +607,30 @@ const safeHandler = (fn: (req: any, res: any) => Promise<void>) => async (req: a
             // Sync finalized log to Google Sheets automatically!
             await syncMachineLogToGoogleSheets({
               ...logData,
-              ...updatedLog
+              ...updatedLog,
+              id: logDoc.id
             });
           }
         }
 
-        // Transition INTO a downtime -> create new ongoing log instantly
-        if (status === 'Idle' || status === 'Breakdown') {
-          let finalReason = reason !== undefined ? reason : (oldMachine.reason || 'Unspecified');
-          if (!finalReason || finalReason === "") {
-            finalReason = 'Unspecified';
-          }
+        // 2. Start a new ongoing log for the NEW reason
+        if (reason && reason !== "" && reason !== "NO_ALERTS") {
           const finalDate = date || getShiftAndDateForDhaka(new Date()).productionDate;
           const newLog = {
             machineId: id,
             date: finalDate,
-            status: status,
-            reason: finalReason,
+            status: oldStatus,
+            reason: reason,
             durationHrs: 0,
             startTime: lastStatusChange || new Date().toISOString(),
             endTime: 'Ongoing'
           };
-          await addDoc(collection(db, 'machine_logs'), newLog);
-        }
-      } else if (reason !== undefined && reason !== oldReason && (oldStatus === 'Idle' || oldStatus === 'Breakdown')) {
-        // Machine remains in downtime, but the reason is changed
-        // 1. Finalize any existing ongoing logs for the OLD reason
-        const ongoingQuery = query(
-          collection(db, 'machine_logs'), 
-          where('machineId', '==', id), 
-          where('endTime', '==', 'Ongoing')
-        );
-        const ongoingSnapshot = await getDocs(ongoingQuery);
-        const nowStr = lastStatusChange || new Date().toISOString();
-
-        for (const logDoc of ongoingSnapshot.docs) {
-          const logData = logDoc.data();
-          const startTimeStr = logData.startTime;
-          
-          // Calculate duration for this slice
-          const elapsedMs = new Date(nowStr).getTime() - new Date(startTimeStr).getTime();
-          const elapsedHours = Number(Math.max(0, elapsedMs / (1000 * 60 * 60)).toFixed(3));
-
-          const updatedLog = {
-            endTime: nowStr,
-            durationHrs: elapsedHours
-          };
-
-          await updateDoc(logDoc.ref, updatedLog);
-
-          // Sync finalized log to Google Sheets automatically!
+          const docRef = await addDoc(collection(db, 'machine_logs'), newLog);
           await syncMachineLogToGoogleSheets({
-            ...logData,
-            ...updatedLog
+            ...newLog,
+            id: docRef.id
           });
         }
-
-        // 2. Start a new ongoing log for the NEW reason
-        const finalReason = reason !== "" ? reason : 'Unspecified';
-        const finalDate = date || getShiftAndDateForDhaka(new Date()).productionDate;
-        const newLog = {
-          machineId: id,
-          date: finalDate,
-          status: oldStatus,
-          reason: finalReason,
-          durationHrs: 0,
-          startTime: nowStr,
-          endTime: 'Ongoing'
-        };
-        await addDoc(collection(db, 'machine_logs'), newLog);
       }
       
       // Update daily stats if a date is provided
@@ -648,6 +667,10 @@ const safeHandler = (fn: (req: any, res: any) => Promise<void>) => async (req: a
          }
       }
       
+      triggerDashboardSheetsSync().catch(err => {
+        console.error("[POST /api/machines/status Sync Error]:", err.message);
+      });
+
       res.json({ message: "Machine updated successfully", machine: mergedData });
     } else {
       res.status(404).json({ message: "Machine not found" });
@@ -730,6 +753,10 @@ const safeHandler = (fn: (req: any, res: any) => Promise<void>) => async (req: a
 
     // Sync to Google Sheets using the service account credential
     await syncToGoogleSheets(cleanEntry);
+
+    triggerDashboardSheetsSync().catch(err => {
+      console.error("[POST /api/production Sync Error]:", err.message);
+    });
 
     res.status(201).json({ 
       message: "Production Entry Saved Successfully", 
@@ -864,6 +891,10 @@ const safeHandler = (fn: (req: any, res: any) => Promise<void>) => async (req: a
       }
     }
 
+    triggerDashboardSheetsSync().catch(err => {
+      console.error("[POST /api/production/bulk Sync Error]:", err.message);
+    });
+
     res.status(201).json({ 
       message: `${entries.length} records imported successfully`
     });
@@ -898,6 +929,17 @@ const safeHandler = (fn: (req: any, res: any) => Promise<void>) => async (req: a
 
     await updateDoc(docRef, cleanedUpdates);
 
+    // Get the fully updated production entry to sync with Google Sheets
+    const updatedDocSnap = await getDoc(docRef);
+    if (updatedDocSnap.exists()) {
+      const fullUpdatedData = updatedDocSnap.data();
+      await syncUpdatedEntryToGoogleSheets(fullUpdatedData);
+    }
+
+    triggerDashboardSheetsSync().catch(err => {
+      console.error("[POST /api/production/update Sync Error]:", err.message);
+    });
+
     res.json({ message: "Production entry updated successfully" });
   }));
 
@@ -913,7 +955,7 @@ const safeHandler = (fn: (req: any, res: any) => Promise<void>) => async (req: a
     const recordsSnapshot = await getDocs(
       query(collection(db, "machine_logs"), orderBy("endTime", "asc"))
     );
-    const records = recordsSnapshot.docs.map(doc => doc.data());
+    const records = recordsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
     
     if (records.length > 0) {
       await syncMultipleMachineLogsToGoogleSheets(records);
@@ -929,7 +971,14 @@ const safeHandler = (fn: (req: any, res: any) => Promise<void>) => async (req: a
     const docRef = await addDoc(collection(db, 'machine_logs'), log);
     
     // Sync this single log to Google Sheets Breakdown Logs tab
-    await syncMachineLogToGoogleSheets(log);
+    await syncMachineLogToGoogleSheets({
+      ...log,
+      id: docRef.id
+    });
+
+    triggerDashboardSheetsSync().catch(err => {
+      console.error("[POST /api/machine-logs Sync Error]:", err.message);
+    });
 
     res.json({ message: "Log created", id: docRef.id });
   }));
@@ -976,6 +1025,10 @@ const safeHandler = (fn: (req: any, res: any) => Promise<void>) => async (req: a
     if (countLogs > 0 || machinesSnap.docs.length > 0 || statsSnap.docs.length > 0) {
        await batch.commit();
     }
+
+    triggerDashboardSheetsSync().catch(err => {
+      console.error("[POST /api/utils/clear-breakdown Sync Error]:", err.message);
+    });
     
     res.json({ message: `Cleared ${countLogs} logs, reset machines and stats.` });
   }));
@@ -1059,6 +1112,86 @@ const safeHandler = (fn: (req: any, res: any) => Promise<void>) => async (req: a
   seedInitialData().catch(err => {
     console.error("[Startup Seeding Check Failed]:", err);
   });
+
+  async function triggerDashboardSheetsSync() {
+    try {
+      const db = initializeFirebase();
+      if (!db) {
+        console.warn("[Auto-Sync] Firestore database not ready.");
+        return;
+      }
+
+      const { productionDate } = getShiftAndDateForDhaka(new Date());
+      
+      // Fetch machines
+      const machineSnapshot = await getDocs(collection(db, 'machines'));
+      const baseMachines = machineSnapshot.docs.map(d => d.data());
+      
+      // Fetch daily stats for today
+      const dailyStatsMap = new Map();
+      const statsQuery = query(collection(db, 'machine_daily_stats'), where('date', '==', productionDate));
+      const statsSnapshot = await getDocs(statsQuery);
+      statsSnapshot.docs.forEach(d => {
+          const data = d.data();
+          dailyStatsMap.set(data.machineId, data);
+      });
+
+      // Fetch production records for today
+      const productionQuery = query(collection(db, 'production_records'), where('ProductionDate', '==', productionDate));
+      const productionSnapshot = await getDocs(productionQuery);
+      const masterData = productionSnapshot.docs.map(d => d.data());
+
+      // Generate summary array exactly like GET /api/dashboard
+      const summary = baseMachines.map((m: any) => {
+        const machineProduction = masterData.filter((d: any) => d.MachineNo === m.id);
+        const dailyStats = dailyStatsMap.get(m.id) || { 
+          target: m.target || 0,
+          numBreakdown: 0,
+          breakdownTime: 0,
+          numIdle: 0,
+          idleTime: 0
+        };
+        
+        return {
+          Date: productionDate,
+          MachineNo: m.id || 'Unknown',
+          TargetKgs: dailyStats.target || 0,
+          TotalRolls: machineProduction.length || 0,
+          TotalMeter: machineProduction.reduce((acc: number, curr: any) => acc + (Number(curr.FinishedMeter) || 0), 0),
+          TotalProductionKgs: machineProduction.reduce((acc: number, curr: any) => acc + (Number(curr.FinishedKgs) || 0), 0),
+          MachineStatus: m.status || 'Idle',
+          BreakdownType: m.status === 'Breakdown' ? (m.reason || '') : '',
+          ReasonOfIdle: m.status === 'Idle' ? (m.reason || '') : '',
+          LastUpdateTime: m.lastStatusChange || (machineProduction.length > 0 ? machineProduction[machineProduction.length - 1].DataUpdateTime : "N/A"),
+          BreakdownNoOfTimes: dailyStats.numBreakdown || 0,
+          BreakdownDurationMins: dailyStats.breakdownTime || 0,
+          IdleNoOfTimes: dailyStats.numIdle || 0,
+          IdleDurationMins: dailyStats.idleTime || 0,
+          LastUpdate: m.lastStatusChange || (machineProduction.length > 0 ? machineProduction[machineProduction.length - 1].DataUpdateTime : "N/A"),
+          Reason: m.reason || ''
+        };
+      });
+
+      // Sync to Google Sheets
+      await syncDashboardToGoogleSheets(summary);
+    } catch (error: any) {
+      console.error("[Auto-Sync Error]:", error.message);
+    }
+  };
+
+  // Run initial sync after a short delay (10 seconds) on server startup
+  setTimeout(() => {
+    console.log("[Auto-Sync] Running initial startup dashboard sync...");
+    triggerDashboardSheetsSync().catch(console.error);
+  }, 10000);
+
+  // Auto sync every 2 hours in continuous server environment to conserve database read quota
+  if (!process.env.VERCEL && !process.env.AWS_LAMBDA_FUNCTION_NAME) {
+    setInterval(() => {
+      console.log("[Auto-Sync] Running 2-hour interval dashboard sync...");
+      triggerDashboardSheetsSync().catch(console.error);
+    }, 7200000); // 2 hours = 7,200,000 ms
+  }
 
 export { app };
 export default app;
