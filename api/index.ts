@@ -1,7 +1,7 @@
 import express from "express";
 import path from "path";
 import fs from "fs";
-import { syncToGoogleSheets, syncMultipleToGoogleSheets, syncMachineLogToGoogleSheets, syncMultipleMachineLogsToGoogleSheets, syncDashboardToGoogleSheets, syncUpdatedEntryToGoogleSheets } from "./google_sheets.js";
+import { syncToGoogleSheets, syncMultipleToGoogleSheets, syncMachineLogToGoogleSheets, syncMultipleMachineLogsToGoogleSheets, syncDashboardToGoogleSheets, syncUpdatedEntryToGoogleSheets, uploadPendingOrdersToGoogleSheets, deletePendingOrdersFromGoogleSheets } from "./google_sheets.js";
 import { initializeApp, getApp, getApps } from "firebase/app";
 import { 
   getFirestore, 
@@ -16,7 +16,8 @@ import {
   orderBy, 
   limit, 
   writeBatch,
-  where
+  where,
+  deleteDoc
 } from "firebase/firestore";
 
 import { fileURLToPath } from 'node:url';
@@ -948,6 +949,44 @@ const safeHandler = (fn: (req: any, res: any) => Promise<void>) => async (req: a
     if (!db) return res.json([]);
     const s = await getDocs(query(collection(db, 'machine_logs'), orderBy('endTime', 'desc')));
     res.json(s.docs.map(d => ({ id: d.id, ...d.data() })));
+  }));
+
+  app.get("/api/pending-orders/current", safeHandler(async (req, res) => {
+    const db = initializeFirebase();
+    if (!db) return res.json(null);
+    const docRef = doc(db, 'pending_orders_info', 'current');
+    const docSnap = await getDoc(docRef);
+    if (docSnap.exists()) {
+      return res.json(docSnap.data());
+    }
+    return res.json(null);
+  }));
+
+  app.post("/api/pending-orders/upload", safeHandler(async (req, res) => {
+    const { base64Content, filename } = req.body;
+    if (!base64Content || !filename) {
+      return res.status(400).json({ error: "Missing file content or filename" });
+    }
+
+    const uploadResult = await uploadPendingOrdersToGoogleSheets(base64Content, filename);
+    if (uploadResult) {
+      const db = initializeFirebase();
+      if (db) {
+        const docRef = doc(db, 'pending_orders_info', 'current');
+        await setDoc(docRef, uploadResult);
+      }
+    }
+    res.json(uploadResult);
+  }));
+
+  app.delete("/api/pending-orders/current", safeHandler(async (req, res) => {
+    await deletePendingOrdersFromGoogleSheets();
+    const db = initializeFirebase();
+    if (db) {
+      const docRef = doc(db, 'pending_orders_info', 'current');
+      await deleteDoc(docRef);
+    }
+    res.json({ message: "Successfully cleared pending orders from Google Sheet and database" });
   }));
 
   app.post("/api/sync-all-breakdown-sheets", safeHandler(async (req, res) => {

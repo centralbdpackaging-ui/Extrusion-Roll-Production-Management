@@ -1,5 +1,7 @@
 import { google } from 'googleapis';
 import path from 'path';
+import { Readable } from 'stream';
+import * as XLSX from 'xlsx';
 
 // Authenticate using the service account credential
 let auth: any;
@@ -595,4 +597,261 @@ export async function syncUpdatedEntryToGoogleSheets(entry: any) {
     console.error("Error updating entry in Google Sheets:", err.message);
   }
 }
+
+export async function uploadPendingOrdersToGoogleSheets(base64Content: string, filename: string) {
+  try {
+    const drive = google.drive({ version: 'v3', auth });
+    const sheets = google.sheets({ version: 'v4', auth });
+
+    // 1. Find the spreadsheet
+    let spreadsheetId = null;
+    const query = 'name="Production Records (Lifetime)" and mimeType="application/vnd.google-apps.spreadsheet" and trashed=false';
+    const searchRes = await drive.files.list({
+      q: query,
+      fields: 'files(id, name)'
+    });
+
+    if (searchRes.data.files && searchRes.data.files.length > 0) {
+      spreadsheetId = searchRes.data.files[0].id;
+    }
+
+    if (!spreadsheetId) {
+      throw new Error("Spreadsheet 'Production Records (Lifetime)' not found. Please ensure it exists and is shared.");
+    }
+
+    // 2. Ensure "Pending Orders" exists, and delete "Pending Orders Metadata" if it exists
+    const spreadsheet = await sheets.spreadsheets.get({ spreadsheetId });
+    const sheetsList = spreadsheet.data.sheets || [];
+    const hasSheet = sheetsList.some(s => s.properties?.title === 'Pending Orders');
+    const metaSheet = sheetsList.find(s => s.properties?.title === 'Pending Orders Metadata');
+
+    const requests: any[] = [];
+    if (!hasSheet) {
+      requests.push({
+        addSheet: {
+          properties: { title: 'Pending Orders' }
+        }
+      });
+    }
+    if (metaSheet && metaSheet.properties?.sheetId !== undefined) {
+      requests.push({
+        deleteSheet: {
+          sheetId: metaSheet.properties.sheetId
+        }
+      });
+    }
+
+    if (requests.length > 0) {
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId,
+        requestBody: { requests }
+      });
+    }
+
+    // 3. Clear all existing rows from "Pending Orders" tab
+    await sheets.spreadsheets.values.clear({
+      spreadsheetId,
+      range: 'Pending Orders!A1:Z50000'
+    });
+
+    // 4. Parse Base64 to raw rows using xlsx
+    let cleanBase64 = base64Content;
+    if (base64Content.includes(';base64,')) {
+      cleanBase64 = base64Content.split(';base64,')[1];
+    }
+    const buffer = Buffer.from(cleanBase64, 'base64');
+    const workbook = XLSX.read(buffer, { type: 'buffer' });
+    const firstSheetName = workbook.SheetNames[0];
+    const worksheet = workbook.Sheets[firstSheetName];
+    const rawData: any[][] = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+
+    if (!rawData || rawData.length === 0) {
+      throw new Error("The uploaded file does not contain any readable rows.");
+    }
+
+    // Custom dynamic column scanning with smart fallbacks
+    let headerRowIndex = 2; // Row 3 is index 2
+    let piIndex = -1;
+    let retailerIndex = -1;
+    let customerIndex = -1;
+
+    // Check Row 3 (index 2) first
+    if (rawData.length > 2) {
+      const row = rawData[2]; // Index 2 is Row 3
+      if (row && Array.isArray(row)) {
+        const colNamesLower = Array.from(row).map(h => String(h || "").trim().toLowerCase());
+        piIndex = colNamesLower.findIndex(s => 
+          s && (s === "pi no." || s === "pi no" || s === "pino" || s === "pino." || s === "pi" || s === "pi #" || s === "pi_no" || s.includes("pi no") || s.includes("pi-no") || s === "proforma invoice" || s.includes("pi"))
+        );
+        retailerIndex = colNamesLower.findIndex(s => 
+          s && (s === "retailer" || s === "retailer name" || s.includes("retailer") || s === "brand" || s.includes("brand"))
+        );
+        customerIndex = colNamesLower.findIndex(s => 
+          s && (s === "customer" || s === "customer name" || s.includes("customer") || s === "buyer" || s.includes("buyer") || s === "factory name" || s.includes("factory"))
+        );
+      }
+    }
+
+    // Dynamic scanning from other rows if index 2 doesn't match perfectly
+    if (piIndex === -1 || retailerIndex === -1 || customerIndex === -1) {
+      for (let r = 0; r < Math.min(rawData.length, 50); r++) {
+        if (r === 2) continue; // parsed index 2 already
+        const row = rawData[r];
+        if (!row || !Array.isArray(row)) continue;
+
+        const colNamesLower = Array.from(row).map(h => String(h || "").trim().toLowerCase());
+
+        const tempPiIndex = colNamesLower.findIndex(s => 
+          s && (s === "pi no." || s === "pi no" || s === "pino" || s === "pino." || s === "pi" || s === "pi #" || s === "pi_no" || s.includes("pi no") || s.includes("pi-no") || s === "proforma invoice" || s.includes("pi"))
+        );
+        const tempRetailerIndex = colNamesLower.findIndex(s => 
+          s && (s === "retailer" || s === "retailer name" || s.includes("retailer") || s === "brand" || s.includes("brand"))
+        );
+        const tempCustomerIndex = colNamesLower.findIndex(s => 
+          s && (s === "customer" || s === "customer name" || s.includes("customer") || s === "buyer" || s.includes("buyer") || s === "factory name" || s.includes("factory"))
+        );
+
+        let matchCount = 0;
+        if (tempPiIndex !== -1) matchCount++;
+        if (tempRetailerIndex !== -1) matchCount++;
+        if (tempCustomerIndex !== -1) matchCount++;
+
+        // If at least 2 headers match, we assume this is the header row
+        if (matchCount >= 2) {
+          headerRowIndex = r;
+          if (tempPiIndex !== -1) piIndex = tempPiIndex;
+          if (tempRetailerIndex !== -1) retailerIndex = tempRetailerIndex;
+          if (tempCustomerIndex !== -1) customerIndex = tempCustomerIndex;
+          break;
+        }
+      }
+    }
+
+    // If still missing, throw an informative exception
+    const missing: string[] = [];
+    if (piIndex === -1) missing.push("'PI No.'");
+    if (retailerIndex === -1) missing.push("'Retailer'");
+    if (customerIndex === -1) missing.push("'Customer'");
+
+    if (missing.length > 0) {
+      const sampleRow = rawData[headerRowIndex] || rawData[2] || [];
+      const colNames = Array.from(sampleRow).map((h: any) => String(h || "").trim());
+      throw new Error(`Row 3 (বা অন্য কোনো হেডার রো) এ প্রয়োজনীয় কলামগুলো পাওয়া যায়নি: ${missing.join(", ")}। Row 3 এর কলামগুলো ছিল: [ ${colNames.filter(Boolean).slice(0, 15).join(", ")} ]`);
+    }
+
+    // Filter, keep only the 3 columns, and merge/deduplicate records
+    const seen = new Set<string>();
+    const uniqueRows: string[][] = [];
+
+    const startIdx = headerRowIndex + 1;
+    for (let idx = startIdx; idx < rawData.length; idx++) {
+      const row = rawData[idx];
+      if (!row || !Array.isArray(row)) continue;
+
+      const piVal = String(row[piIndex] !== undefined && row[piIndex] !== null ? row[piIndex] : "").trim();
+      const retailerVal = String(row[retailerIndex] !== undefined && row[retailerIndex] !== null ? row[retailerIndex] : "").trim();
+      const customerVal = String(row[customerIndex] !== undefined && row[customerIndex] !== null ? row[customerIndex] : "").trim();
+
+      // Skip empty or placeholder rows
+      if (!piVal && !retailerVal && !customerVal) {
+        continue;
+      }
+
+      // Merge (deduplicate) rows that share identical PI No, Retailer, and Customer values
+      const key = `${piVal.toLowerCase()}||${retailerVal.toLowerCase()}||${customerVal.toLowerCase()}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        uniqueRows.push([piVal, retailerVal, customerVal]);
+      }
+    }
+
+    const uploadTimeStr = new Date().toISOString();
+    const metadataRow = [
+      "ID_METADATA_PENDING_ORDERS", 
+      filename, 
+      uploadTimeStr, 
+      String(uniqueRows.length), // total unique rows
+      "SPREADSHEET_ID_LINK", 
+      spreadsheetId
+    ];
+
+    const finalRows: any[][] = [
+      ["PI No.", "Retailer", "Customer"], // Header is exactly Row 1 of "Pending Orders" tab
+      ...uniqueRows
+    ];
+
+    // 5. Write clean parsed unique rows to "Pending Orders" starting precisely at A1
+    await sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: 'Pending Orders!A1',
+      valueInputOption: 'USER_ENTERED',
+      requestBody: {
+        values: finalRows
+      }
+    });
+
+    const webViewLink = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit`;
+
+    return {
+      filename,
+      uploadedAt: uploadTimeStr,
+      totalRows: uniqueRows.length,
+      webViewLink,
+      spreadsheetId
+    };
+  } catch (err: any) {
+    console.error("Error saving pending orders to Google Sheet:", err);
+    throw err;
+  }
+}
+
+export async function deletePendingOrdersFromGoogleSheets() {
+  try {
+    const drive = google.drive({ version: 'v3', auth });
+    const sheets = google.sheets({ version: 'v4', auth });
+
+    // 1. Find spreadsheet
+    let spreadsheetId = null;
+    const query = 'name="Production Records (Lifetime)" and mimeType="application/vnd.google-apps.spreadsheet" and trashed=false';
+    const searchRes = await drive.files.list({
+      q: query,
+      fields: 'files(id, name)'
+    });
+
+    if (searchRes.data.files && searchRes.data.files.length > 0) {
+      spreadsheetId = searchRes.data.files[0].id;
+    }
+
+    if (!spreadsheetId) return false;
+
+    // Clear the rows in "Pending Orders" tab
+    await sheets.spreadsheets.values.clear({
+      spreadsheetId,
+      range: 'Pending Orders!A1:Z50000'
+    });
+
+    // Also look for "Pending Orders Metadata" tab and delete it if it exists
+    const spreadsheet = await sheets.spreadsheets.get({ spreadsheetId });
+    const sheetsList = spreadsheet.data.sheets || [];
+    const metaSheet = sheetsList.find(s => s.properties?.title === 'Pending Orders Metadata');
+    if (metaSheet && metaSheet.properties?.sheetId !== undefined) {
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId,
+        requestBody: {
+          requests: [{
+            deleteSheet: {
+              sheetId: metaSheet.properties.sheetId
+            }
+          }]
+        }
+      });
+    }
+
+    return true;
+  } catch (err: any) {
+    console.error("Error deleting pending orders sheet:", err.message);
+    throw err;
+  }
+}
+
 

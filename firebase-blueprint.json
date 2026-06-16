@@ -61,6 +61,18 @@
         "email": { "type": "string" }
       }
     },
+    "PendingOrdersInfo": {
+      "title": "Pending Orders Info",
+      "description": "Metadata for pending orders file uploaded",
+      "type": "object",
+      "properties": {
+        "filename": { "type": "string" },
+        "uploadedAt": { "type": "string" },
+        "totalRows": { "type": "number" },
+        "webViewLink": { "type": "string" },
+        "spreadsheetId": { "type": "string" }
+      }
+    },
     "ProductionRecord": {
       "title": "Production Record",
       "description": "Historical production log",
@@ -98,6 +110,7 @@
     "/master_store/dropdowns": { "schema": "MasterStore", "description": "Master lists for dropdowns" },
     "/machines/{machineId}": { "schema": "Machine", "description": "Machine data" },
     "/operators/{operatorId}": { "schema": "Operator", "description": "Operator data" },
-    "/production_records/{recordId}": { "schema": "ProductionRecord", "description": "Production history" }
+    "/production_records/{recordId}": { "schema": "ProductionRecord", "description": "Production history" },
+    "/pending_orders_info/{id}": { "schema": "PendingOrdersInfo", "description": "Pending orders metadata info" }
   }
 }

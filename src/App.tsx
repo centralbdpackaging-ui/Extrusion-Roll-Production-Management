@@ -35,13 +35,18 @@ import {
   Edit3,
   X,
   Printer,
-  QrCode
+  QrCode,
+  FileUp,
+  FolderOpen,
+  UploadCloud,
+  Trash2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn, formatDate, getShiftAndDateForDhaka, normalizeDateString } from './lib/utils';
 import { QRCodeSVG } from 'qrcode.react';
 import ReportsPage from './components/ReportsPage';
 import BreakdownDataTable from './components/BreakdownDataTable';
+import PendingOrderPage from './components/PendingOrderPage';
 import { initializeApp } from 'firebase/app';
 import firebaseConfig from '../firebase-applet-config.json';
 
@@ -209,6 +214,27 @@ export default function App() {
   const [feedSearchQuery, setFeedSearchQuery] = useState("");
   
   const [isSyncing, setIsSyncing] = useState(false);
+  const [pendingOrderInfo, setPendingOrderInfo] = useState<{
+    filename: string;
+    uploadedAt: string;
+    totalRows?: number;
+    webViewLink: string;
+    spreadsheetId?: string;
+  } | null>(null);
+  const [isUploadingPendingOrder, setIsUploadingPendingOrder] = useState(false);
+  const [isDeletingPendingOrder, setIsDeletingPendingOrder] = useState(false);
+
+  const fetchPendingOrderInfo = async () => {
+    try {
+      const res = await fetch("/api/pending-orders/current");
+      if (res.ok) {
+        const data = await res.json();
+        setPendingOrderInfo(data);
+      }
+    } catch (err) {
+      console.error("Error fetching pending order info:", err);
+    }
+  };
   const [tick, setTick] = useState(0);
 
   useEffect(() => {
@@ -231,6 +257,9 @@ export default function App() {
     if (activeTab === 'master-production-record' || activeTab === 'reports') {
       fetchProductionRecords();
     }
+    if (activeTab === 'pending-order') {
+      fetchPendingOrderInfo();
+    }
   }, [activeTab]);
 
   const [machineFormData, setMachineFormData] = useState({
@@ -251,7 +280,8 @@ export default function App() {
           fetchRecentEntries(),
           fetchNextRollId(),
           fetchPreviousRollId(),
-          fetchMasterStore()
+          fetchMasterStore(),
+          fetchPendingOrderInfo()
         ]);
       } catch (err: any) {
         setFetchError("ডিপেনডেন্সি লোড করতে সমস্যা হয়েছে। ডাটাবেস এরর হতে পারে।");
@@ -924,6 +954,13 @@ export default function App() {
               onClick={() => setActiveTab('operators')}
               isOpen={isSidebarOpen}
             />
+            <SidebarLink 
+              icon={<FileUp size={18} />} 
+              label="PENDING ORDER" 
+              active={activeTab === 'pending-order'}
+              onClick={() => setActiveTab('pending-order')}
+              isOpen={isSidebarOpen}
+            />
           </div>
         </nav>
       </aside>
@@ -946,7 +983,8 @@ export default function App() {
                activeTab === 'history' ? 'Operation Logs' : 
                activeTab === 'master-config' ? 'Master Data Table' : 
                activeTab === 'operators' ? 'Operator Management' : 
-               activeTab === 'breakdown-data' ? 'Breakdown Data' : 'System Setup'}
+               activeTab === 'breakdown-data' ? 'Breakdown Data' : 
+               activeTab === 'pending-order' ? 'Pending Order' : 'System Setup'}
             </h2>
             <div className="flex items-center gap-2 px-2 py-0.5 rounded bg-emerald-50 border border-emerald-100">
                <Database size={10} className="text-emerald-500" />
@@ -2179,6 +2217,22 @@ export default function App() {
                     </div>
                   </div>
                 </div>
+              </motion.div>
+            )}
+            {activeTab === 'pending-order' && (
+              <motion.div 
+                key="pending-order"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                className="space-y-6"
+              >
+                <PendingOrderPage 
+                  pendingOrderInfo={pendingOrderInfo}
+                  setPendingOrderInfo={setPendingOrderInfo}
+                  showToast={showToast}
+                  fetchPendingOrderInfo={fetchPendingOrderInfo}
+                />
               </motion.div>
             )}
             {activeTab === 'breakdown-data' && (
