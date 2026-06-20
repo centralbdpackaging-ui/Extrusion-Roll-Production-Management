@@ -2,27 +2,31 @@ import { google } from 'googleapis';
 import path from 'path';
 import { Readable } from 'stream';
 import * as XLSX from 'xlsx';
+import fs from 'fs';
 
-// Authenticate using the service account credential
-let auth: any;
+// Lazy authentication function
+export function getGoogleAuth(): any {
+  if (process.env.GOOGLE_SERVICE_ACCOUNT_CREDENTIALS) {
+    try {
+      const credentials = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_CREDENTIALS);
+      return new google.auth.GoogleAuth({
+        credentials,
+        scopes: ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive.file', 'https://www.googleapis.com/auth/drive'],
+      });
+    } catch (error) {
+      console.error("Failed to parse GOOGLE_SERVICE_ACCOUNT_CREDENTIALS environment variable", error);
+    }
+  }
 
-if (process.env.GOOGLE_SERVICE_ACCOUNT_CREDENTIALS) {
-  try {
-    const credentials = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_CREDENTIALS);
-    auth = new google.auth.GoogleAuth({
-      credentials,
+  const credentialsPath = path.join(process.cwd(), 'google-credentials.json');
+  if (fs.existsSync(credentialsPath)) {
+    return new google.auth.GoogleAuth({
+      keyFile: credentialsPath,
       scopes: ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive.file', 'https://www.googleapis.com/auth/drive'],
     });
-  } catch (error) {
-    console.error("Failed to parse GOOGLE_SERVICE_ACCOUNT_CREDENTIALS environment variable", error);
   }
-}
 
-if (!auth) {
-  auth = new google.auth.GoogleAuth({
-    keyFile: path.join(process.cwd(), 'google-credentials.json'),
-    scopes: ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive.file', 'https://www.googleapis.com/auth/drive'],
-  });
+  return null;
 }
 
 export function cleanPi(pi: string): string {
@@ -104,6 +108,11 @@ export async function getPendingOrderDetailsMap(sheets: any, spreadsheetId: stri
 
 export async function getPendingOrderDetailsMapDirect(): Promise<Map<string, { retailer: string, customer: string }>> {
   try {
+    const auth = getGoogleAuth();
+    if (!auth) {
+      console.warn("[Google Sheets] Google credentials are missing. Skipping fetching details map direct.");
+      return new Map();
+    }
     const drive = google.drive({ version: 'v3', auth });
     const sheets = google.sheets({ version: 'v4', auth });
 
@@ -131,6 +140,11 @@ export async function getPendingOrderDetailsMapDirect(): Promise<Map<string, { r
 
 export async function getPendingOrderDetailsByPi(piNumber: string): Promise<{ retailer: string, customer: string }> {
   try {
+    const auth = getGoogleAuth();
+    if (!auth) {
+      console.warn("[Google Sheets] Google credentials are missing. Skipping fetching pending order details by PI.");
+      return { retailer: '', customer: '' };
+    }
     const drive = google.drive({ version: 'v3', auth });
     const sheets = google.sheets({ version: 'v4', auth });
 
@@ -159,6 +173,11 @@ export async function getPendingOrderDetailsByPi(piNumber: string): Promise<{ re
 
 export async function syncToGoogleSheets(entry: any) {
   try {
+    const auth = getGoogleAuth();
+    if (!auth) {
+      console.warn("[Google Sheets] Google credentials are missing. Skipping syncing to Google Sheets.");
+      return;
+    }
     const drive = google.drive({ version: 'v3', auth });
     const sheets = google.sheets({ version: 'v4', auth });
 
@@ -266,6 +285,11 @@ export async function syncToGoogleSheets(entry: any) {
 
 export async function syncMultipleToGoogleSheets(entries: any[]) {
   try {
+    const auth = getGoogleAuth();
+    if (!auth) {
+      console.warn("[Google Sheets] Google credentials are missing. Skipping batch syncing to Google Sheets.");
+      return;
+    }
     const drive = google.drive({ version: 'v3', auth });
     const sheets = google.sheets({ version: 'v4', auth });
 
@@ -375,6 +399,11 @@ export async function syncMultipleToGoogleSheets(entries: any[]) {
 
 export async function syncMachineLogToGoogleSheets(log: any) {
   try {
+    const auth = getGoogleAuth();
+    if (!auth) {
+      console.warn("[Google Sheets] Google credentials are missing. Skipping syncing machine log to Google Sheets.");
+      return;
+    }
     const drive = google.drive({ version: 'v3', auth });
     const sheets = google.sheets({ version: 'v4', auth });
 
@@ -507,6 +536,11 @@ export async function syncMachineLogToGoogleSheets(log: any) {
 
 export async function syncMultipleMachineLogsToGoogleSheets(logs: any[]) {
   try {
+    const auth = getGoogleAuth();
+    if (!auth) {
+      console.warn("[Google Sheets] Google credentials are missing. Skipping batch syncing machine logs to Google Sheets.");
+      return;
+    }
     const drive = google.drive({ version: 'v3', auth });
     const sheets = google.sheets({ version: 'v4', auth });
 
@@ -594,6 +628,11 @@ export async function syncMultipleMachineLogsToGoogleSheets(logs: any[]) {
 
 export async function syncDashboardToGoogleSheets(summary: any[]) {
   try {
+    const auth = getGoogleAuth();
+    if (!auth) {
+      console.warn("[Google Sheets] Google credentials are missing. Skipping syncing dashboard to Google Sheets.");
+      return;
+    }
     const drive = google.drive({ version: 'v3', auth });
     const sheets = google.sheets({ version: 'v4', auth });
 
@@ -694,6 +733,11 @@ export async function syncDashboardToGoogleSheets(summary: any[]) {
 
 export async function syncUpdatedEntryToGoogleSheets(entry: any) {
   try {
+    const auth = getGoogleAuth();
+    if (!auth) {
+      console.warn("[Google Sheets] Google credentials are missing. Skipping updating entry in Google Sheets.");
+      return;
+    }
     const drive = google.drive({ version: 'v3', auth });
     const sheets = google.sheets({ version: 'v4', auth });
 
@@ -787,6 +831,10 @@ export async function syncUpdatedEntryToGoogleSheets(entry: any) {
 
 export async function uploadPendingOrdersToGoogleSheets(base64Content: string, filename: string) {
   try {
+    const auth = getGoogleAuth();
+    if (!auth) {
+      throw new Error("Google credentials are missing. Google Sheets integration has not been configured (no GOOGLE_SERVICE_ACCOUNT_CREDENTIALS or google-credentials.json found).");
+    }
     const drive = google.drive({ version: 'v3', auth });
     const sheets = google.sheets({ version: 'v4', auth });
 
@@ -994,6 +1042,10 @@ export async function uploadPendingOrdersToGoogleSheets(base64Content: string, f
 
 export async function deletePendingOrdersFromGoogleSheets() {
   try {
+    const auth = getGoogleAuth();
+    if (!auth) {
+      throw new Error("Google credentials are missing. Google Sheets integration has not been configured (no GOOGLE_SERVICE_ACCOUNT_CREDENTIALS or google-credentials.json found).");
+    }
     const drive = google.drive({ version: 'v3', auth });
     const sheets = google.sheets({ version: 'v4', auth });
 

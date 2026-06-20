@@ -865,11 +865,11 @@ const safeHandler = (fn: (req: any, res: any) => Promise<void>) => async (req: a
       entry: newEntry 
     });
 
-    // Cleanup data older than 48 hours from Firestore
+    // Cleanup data older than 3 days (72 hours) from Firestore
     (async () => {
       try {
-         const twoDaysAgo = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
-         const oldQuery = query(collection(db, 'production_records'), where('EntryTimestamp', '<', twoDaysAgo));
+         const threeDaysAgo = new Date(Date.now() - 72 * 60 * 60 * 1000).toISOString();
+         const oldQuery = query(collection(db, 'production_records'), where('EntryTimestamp', '<', threeDaysAgo));
          const oldDocs = await getDocs(oldQuery);
          if (!oldDocs.empty) {
             const batch = writeBatch(db);
