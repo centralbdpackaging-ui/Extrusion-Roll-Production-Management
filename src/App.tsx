@@ -270,14 +270,49 @@ export default function App() {
     target: ''
   });
 
+  const filterRef = React.useRef(dashboardDateFilter);
+  useEffect(() => {
+    filterRef.current = dashboardDateFilter;
+  }, [dashboardDateFilter]);
+
+  const fetchDateFilter = async () => {
+    try {
+      const res = await fetch('/api/settings/date-filter');
+      const data = await res.json();
+      if (res.ok && data.dateFilter) {
+        setDashboardDateFilter(data.dateFilter);
+        return data.dateFilter;
+      }
+    } catch (err) {
+      console.error("Failed to fetch date filter", err);
+    }
+    return '';
+  };
+
+  const updateDateFilter = async (newDate: string) => {
+    setDashboardDateFilter(newDate);
+    try {
+      await fetch('/api/settings/date-filter', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ dateFilter: newDate })
+      });
+    } catch (err) {
+      console.error("Failed to save date filter", err);
+    }
+  };
+
   useEffect(() => {
     const initFetch = async () => {
       setIsLoading(true);
       setFetchError(null);
       try {
+        const loadedFilter = await fetchDateFilter();
         await Promise.all([
-          fetchDashboard(),
-          fetchMachines(),
+          fetchDashboard(loadedFilter || undefined),
+          fetchMachines(loadedFilter || undefined),
           fetchOperators(),
           fetchRecentEntries(),
           fetchNextRollId(),
@@ -294,13 +329,23 @@ export default function App() {
 
     initFetch();
 
-    const interval = setInterval(() => {
-      fetchDashboard();
+    const interval = setInterval(async () => {
+      let filter = filterRef.current;
+      try {
+        const res = await fetch('/api/settings/date-filter');
+        const data = await res.json();
+        if (res.ok && data.dateFilter && data.dateFilter !== filterRef.current) {
+          setDashboardDateFilter(data.dateFilter);
+          filter = data.dateFilter;
+        }
+      } catch (err) {
+        console.error("Failed to sync date filter on interval", err);
+      }
+      fetchDashboard(filter || undefined);
       fetchRecentEntries();
       fetchNextRollId();
       fetchPreviousRollId();
-      // fetchProductionRecords() is only called when mounting specific tabs to save quota
-    }, 300000); // Changed to 5 minutes to prevent Firestore quota exhaustion
+    }, 180000); // 3 minutes interval
     return () => clearInterval(interval);
   }, []);
 
@@ -1002,7 +1047,7 @@ export default function App() {
               <input 
                 type="date"
                 value={dashboardDateFilter || currentProductionDateStr}
-                onChange={(e) => setDashboardDateFilter(e.target.value)}
+                onChange={(e) => updateDateFilter(e.target.value)}
                 className="bg-transparent border-none p-0 tracking-widest text-[#94a3b8] focus:ring-0 cursor-pointer"
                 style={{ WebkitAppearance: 'none' }}
               />
@@ -2419,7 +2464,7 @@ export default function App() {
                       <input 
                         type="date"
                         value={dashboardDateFilter || currentProductionDateStr}
-                        onChange={(e) => setDashboardDateFilter(e.target.value)}
+                        onChange={(e) => updateDateFilter(e.target.value)}
                         className="bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-4 py-2.5 text-xs font-semibold text-slate-700 focus:outline-none focus:ring-4 focus:ring-brand-primary/20 focus:border-brand-primary focus:bg-brand-primary/5 transition-all w-[160px]"
                       />
                     </div>
@@ -3065,7 +3110,7 @@ function MachineCard({ machine }: { machine: MachineSummary, key?: string | numb
         </div>
       </div>
 
-      {machine.Reason && (
+      {machine.Reason && machine.Reason !== 'NO_ALERTS' && machine.Reason.trim() !== '' && (
         <div className="mb-4 px-3 py-2 rounded-lg bg-orange-50 border border-orange-100 flex items-center gap-2">
           <AlertTriangle size={12} className="text-brand-warning" />
           <p className="text-[10px] font-medium text-brand-warning italic line-clamp-1">

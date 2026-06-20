@@ -561,6 +561,7 @@ const safeHandler = (fn: (req: any, res: any) => Promise<void>) => async (req: a
       if (status) baseUpdates.status = status;
       if (reason !== undefined) baseUpdates.reason = reason;
       if (lastStatusChange !== undefined) baseUpdates.lastStatusChange = lastStatusChange;
+      if (target !== undefined) baseUpdates.target = Number(target) || 0;
       
       if (Object.keys(baseUpdates).length > 0) {
         await updateDoc(docRef, baseUpdates);
@@ -727,6 +728,22 @@ const safeHandler = (fn: (req: any, res: any) => Promise<void>) => async (req: a
   app.get("/api/settings", safeHandler(async (req, res) => {
     const settings = await getRollSettings();
     res.json(settings);
+  }));
+
+  app.get("/api/settings/date-filter", safeHandler(async (req, res) => {
+    const db = initializeFirebase();
+    if (!db) return res.json({ dateFilter: "" });
+    const d = await getDoc(doc(db, 'app_config', 'date_filter'));
+    const data = d.data() || {};
+    res.json({ dateFilter: data.dateFilter || "" });
+  }));
+
+  app.post("/api/settings/date-filter", safeHandler(async (req, res) => {
+    const db = initializeFirebase();
+    if (!db) return res.status(500).json({ error: "No Database" });
+    const { dateFilter } = req.body;
+    await setDoc(doc(db, 'app_config', 'date_filter'), { dateFilter });
+    res.json({ message: "Date filter stored", dateFilter });
   }));
 
   app.get("/api/next-roll-id", safeHandler(async (req, res) => {
@@ -1207,7 +1224,7 @@ const safeHandler = (fn: (req: any, res: any) => Promise<void>) => async (req: a
     const summary = baseMachines.map((m: any) => {
       const machineProduction = masterData.filter((d: any) => d.MachineNo === m.id);
       const dailyStats = dailyStatsMap.get(m.id) || { 
-        target: m.target || 0,
+        target: 0,
         numBreakdown: 0,
         breakdownTime: 0,
         numIdle: 0,
@@ -1222,15 +1239,15 @@ const safeHandler = (fn: (req: any, res: any) => Promise<void>) => async (req: a
         TotalMeter: machineProduction.reduce((acc, curr) => acc + (Number(curr.FinishedMeter) || 0), 0),
         TotalProductionKgs: machineProduction.reduce((acc, curr) => acc + (Number(curr.FinishedKgs) || 0), 0),
         MachineStatus: m.status || 'Idle',
-        BreakdownType: m.status === 'Breakdown' ? (m.reason || '') : '',
-        ReasonOfIdle: m.status === 'Idle' ? (m.reason || '') : '',
+        BreakdownType: (m.status === 'Breakdown' && m.reason !== 'NO_ALERTS' && m.reason !== 'Initial Setup') ? (m.reason || '') : '',
+        ReasonOfIdle: (m.status === 'Idle' && m.reason !== 'NO_ALERTS' && m.reason !== 'Initial Setup') ? (m.reason || '') : '',
         LastUpdateTime: m.lastStatusChange || (machineProduction.length > 0 ? machineProduction[machineProduction.length - 1].DataUpdateTime : "N/A"),
         BreakdownNoOfTimes: dailyStats.numBreakdown || 0,
         BreakdownDurationMins: dailyStats.breakdownTime || 0,
         IdleNoOfTimes: dailyStats.numIdle || 0,
         IdleDurationMins: dailyStats.idleTime || 0,
         LastUpdate: m.lastStatusChange || (machineProduction.length > 0 ? machineProduction[machineProduction.length - 1].DataUpdateTime : "N/A"),
-        Reason: m.reason || ''
+        Reason: (m.reason === 'NO_ALERTS' || m.reason === 'Initial Setup') ? '' : (m.reason || '')
       };
     });
 
@@ -1290,7 +1307,7 @@ const safeHandler = (fn: (req: any, res: any) => Promise<void>) => async (req: a
       const summary = baseMachines.map((m: any) => {
         const machineProduction = masterData.filter((d: any) => d.MachineNo === m.id);
         const dailyStats = dailyStatsMap.get(m.id) || { 
-          target: m.target || 0,
+          target: 0,
           numBreakdown: 0,
           breakdownTime: 0,
           numIdle: 0,
@@ -1305,15 +1322,15 @@ const safeHandler = (fn: (req: any, res: any) => Promise<void>) => async (req: a
           TotalMeter: machineProduction.reduce((acc: number, curr: any) => acc + (Number(curr.FinishedMeter) || 0), 0),
           TotalProductionKgs: machineProduction.reduce((acc: number, curr: any) => acc + (Number(curr.FinishedKgs) || 0), 0),
           MachineStatus: m.status || 'Idle',
-          BreakdownType: m.status === 'Breakdown' ? (m.reason || '') : '',
-          ReasonOfIdle: m.status === 'Idle' ? (m.reason || '') : '',
+          BreakdownType: (m.status === 'Breakdown' && m.reason !== 'NO_ALERTS' && m.reason !== 'Initial Setup') ? (m.reason || '') : '',
+          ReasonOfIdle: (m.status === 'Idle' && m.reason !== 'NO_ALERTS' && m.reason !== 'Initial Setup') ? (m.reason || '') : '',
           LastUpdateTime: m.lastStatusChange || (machineProduction.length > 0 ? machineProduction[machineProduction.length - 1].DataUpdateTime : "N/A"),
           BreakdownNoOfTimes: dailyStats.numBreakdown || 0,
           BreakdownDurationMins: dailyStats.breakdownTime || 0,
           IdleNoOfTimes: dailyStats.numIdle || 0,
           IdleDurationMins: dailyStats.idleTime || 0,
           LastUpdate: m.lastStatusChange || (machineProduction.length > 0 ? machineProduction[machineProduction.length - 1].DataUpdateTime : "N/A"),
-          Reason: m.reason || ''
+          Reason: (m.reason === 'NO_ALERTS' || m.reason === 'Initial Setup') ? '' : (m.reason || '')
         };
       });
 

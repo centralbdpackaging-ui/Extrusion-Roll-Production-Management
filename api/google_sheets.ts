@@ -664,7 +664,7 @@ export async function syncDashboardToGoogleSheets(summary: any[]) {
        row.Date || '',
        row.TargetKgs !== undefined ? Number(row.TargetKgs) : 0,
        row.MachineStatus || 'Running',
-       row.Reason || '',
+       (row.Reason && row.Reason !== 'NO_ALERTS' && row.Reason !== 'Initial Setup') ? row.Reason : '',
        row.TotalRolls !== undefined ? Number(row.TotalRolls) : 0,
        row.TotalMeter !== undefined ? Number(row.TotalMeter).toFixed(2) : '0.00',
        row.TotalProductionKgs !== undefined ? Number(row.TotalProductionKgs).toFixed(2) : '0.00',
