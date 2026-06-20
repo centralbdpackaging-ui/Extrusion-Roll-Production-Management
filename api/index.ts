@@ -1198,6 +1198,7 @@ const safeHandler = (fn: (req: any, res: any) => Promise<void>) => async (req: a
   app.get("/api/dashboard", safeHandler(async (req, res) => {
     const db = initializeFirebase();
     const dateQuery = req.query.date as string;
+    console.log(`[GET /api/dashboard] dateQuery: ${dateQuery}`);
     if (!db) throw new Error("Database not initialized");
 
     const machineSnapshot = await getDocs(collection(db, 'machines'));
@@ -1214,12 +1215,17 @@ const safeHandler = (fn: (req: any, res: any) => Promise<void>) => async (req: a
         });
     }
 
-    const productionQuery = dateQuery 
-      ? query(collection(db, 'production_records'), where('ProductionDate', '==', dateQuery))
-      : query(collection(db, 'production_records'));
-      
-    const productionSnapshot = await getDocs(productionQuery);
-    const masterData = productionSnapshot.docs.map(d => d.data());
+    // Fetch production records (always fetch all for now, to ensure filtering works correctly)
+    const productionSnapshot = await getDocs(query(collection(db, 'production_records')));
+    let masterData = productionSnapshot.docs.map(d => d.data());
+    
+    // Manual filtering
+    if (dateQuery) {
+        masterData = masterData.filter(d => d.ProductionDate === dateQuery);
+    }
+    
+    // Debug: log first few dates
+    console.log(`[GET /api/dashboard] Found ${masterData.length} records. First 3 dates:`, masterData.slice(0, 3).map(d => d.ProductionDate));
 
     const summary = baseMachines.map((m: any) => {
       const machineProduction = masterData.filter((d: any) => d.MachineNo === m.id);

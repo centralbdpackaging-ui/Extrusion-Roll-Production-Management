@@ -371,6 +371,7 @@ export default function App() {
     try {
       const dhakaShiftInfo = getShiftAndDateForDhaka();
       const dateParam = dateOverride || dashboardDateFilter || dhakaShiftInfo.productionDate;
+      console.log(`[fetchDashboard] dateParam: ${dateParam}, dashboardDateFilter: ${dashboardDateFilter}, dhakaShiftInfo:`, dhakaShiftInfo);
       const res = await fetch(`/api/dashboard?date=${dateParam}`);
       const data = await res.json();
       if (res.ok) {
@@ -637,6 +638,16 @@ export default function App() {
         }));
         return;
       }
+    }
+
+    // Set PINumber based on ProductionType
+    if (name === 'ProductionType') {
+      setFormData(prev => ({ 
+        ...prev, 
+        ProductionType: value,
+        PINumber: value === 'Sample' ? 'SMPL' : 'MPBL'
+      }));
+      return;
     }
     
     setFormData(prev => ({ ...prev, [name]: value }));
