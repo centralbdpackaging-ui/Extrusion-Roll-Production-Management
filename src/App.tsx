@@ -640,16 +640,6 @@ export default function App() {
       }
     }
 
-    // Set PINumber based on ProductionType
-    if (name === 'ProductionType') {
-      setFormData(prev => ({ 
-        ...prev, 
-        ProductionType: value,
-        PINumber: value === 'Sample' ? 'SMPL' : 'MPBL'
-      }));
-      return;
-    }
-    
     setFormData(prev => ({ ...prev, [name]: value }));
   };
 
@@ -684,10 +674,16 @@ export default function App() {
     try {
       const headers: Record<string, string> = { 'Content-Type': 'application/json' };
 
+      const productionTypePrefix = formData.ProductionType === 'Sample' ? 'SMPL' : 'MPBL';
+      let finalPINumber = formData.PINumber;
+      if (!finalPINumber.includes('/')) {
+        finalPINumber = `${productionTypePrefix}/${formData.PINumber}/${formData.Year}`;
+      }
+
       const res = await fetch('/api/production', {
         method: 'POST',
         headers,
-        body: JSON.stringify(formData)
+        body: JSON.stringify({ ...formData, PINumber: finalPINumber })
       });
       const data = await res.json();
       if (res.ok) {
