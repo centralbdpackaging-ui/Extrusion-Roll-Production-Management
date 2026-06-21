@@ -1,7 +1,7 @@
 import express from "express";
 import path from "path";
 import fs from "fs";
-import { syncToGoogleSheets, syncMultipleToGoogleSheets, syncMachineLogToGoogleSheets, syncMultipleMachineLogsToGoogleSheets, syncDashboardToGoogleSheets, syncUpdatedEntryToGoogleSheets, uploadPendingOrdersToGoogleSheets, deletePendingOrdersFromGoogleSheets, getPendingOrderDetailsByPi, getPendingOrderDetailsMapDirect, getMatchedDetails, cleanPi } from "./google_sheets.js";
+import { syncToGoogleSheets, syncMultipleToGoogleSheets, syncMachineLogToGoogleSheets, syncMultipleMachineLogsToGoogleSheets, syncDashboardToGoogleSheets, syncUpdatedEntryToGoogleSheets, uploadPendingOrdersToGoogleSheets, deletePendingOrdersFromGoogleSheets, getPendingOrderDetailsByPi, getPendingOrderDetailsMapDirect, getMatchedDetails, cleanPi, getServiceAccountEmail, getGoogleAuth, getProductionSheetTitle } from "./google_sheets.js";
 import { initializeApp, getApp, getApps } from "firebase/app";
 import { 
   getFirestore, 
@@ -99,7 +99,6 @@ const backfillRetailerCustomerInFirestore = async () => {
   if (!db) return;
   try {
     const piDetailsMap = await getPendingOrderDetailsMapDirect();
-    if (piDetailsMap.size === 0) return;
     
     const recordsSnapshot = await getDocs(collection(db, "production_records"));
     let batch = writeBatch(db);
@@ -109,24 +108,52 @@ const backfillRetailerCustomerInFirestore = async () => {
     for (const docSnap of recordsSnapshot.docs) {
       const data = docSnap.data();
       const piVal = data.PINumber || '';
-      if (piVal) {
+      const updates: any = {};
+      
+      if (piVal && piDetailsMap && piDetailsMap.size > 0) {
         const match = getMatchedDetails(piDetailsMap, piVal);
         const currentRetailer = data.Retailer || '';
         const currentCustomer = data.Customer || '';
         
-        if (match.retailer !== currentRetailer || match.customer !== currentCustomer) {
-          batch.update(docSnap.ref, {
-            Retailer: match.retailer || '',
-            Customer: match.customer || ''
-          });
-          batchOperationCount++;
-          updatedCount++;
-          
-          if (batchOperationCount === 450) {
-            await batch.commit();
-            batch = writeBatch(db);
-            batchOperationCount = 0;
-          }
+        if (match.retailer !== currentRetailer) {
+          updates.Retailer = match.retailer || '';
+        }
+        if (match.customer !== currentCustomer) {
+          updates.Customer = match.customer || '';
+        }
+      }
+
+      // Check missing metadata fields to ensure Google Sheets column sync gets full data
+      const dateObj = data.ProductionDate ? new Date(data.ProductionDate) : new Date();
+      
+      if (!data.EntryTimestamp) {
+        updates.EntryTimestamp = data.ProductionDate ? `${data.ProductionDate}T12:00:00.000Z` : new Date().toISOString();
+      }
+      if (!data.DataUpdateTime) {
+        updates.DataUpdateTime = dateObj.toLocaleString();
+      }
+      if (!data.Fingerprint) {
+        updates.Fingerprint = Math.random().toString(36).substring(2, 10).toUpperCase();
+      }
+      if (!data.EnteredBy) {
+        updates.EnteredBy = "Plant Admin";
+      }
+      if (!data.ProductionYear) {
+        updates.ProductionYear = dateObj.getFullYear().toString();
+      }
+      if (!data.ProductionMonth) {
+        updates.ProductionMonth = dateObj.toLocaleString('default', { month: 'long' });
+      }
+
+      if (Object.keys(updates).length > 0) {
+        batch.update(docSnap.ref, updates);
+        batchOperationCount++;
+        updatedCount++;
+        
+        if (batchOperationCount === 450) {
+          await batch.commit();
+          batch = writeBatch(db);
+          batchOperationCount = 0;
         }
       }
     }
@@ -134,7 +161,7 @@ const backfillRetailerCustomerInFirestore = async () => {
     if (batchOperationCount > 0) {
       await batch.commit();
     }
-    console.log(`[Backfill] Successfully updated ${updatedCount} records in Firestore with Retailer and Customer info.`);
+    console.log(`[Backfill] Successfully updated/backfilled ${updatedCount} records in Firestore with Retailer, Customer, and missing metadata fields.`);
   } catch (err: any) {
     console.error("[Backfill Error]:", err.message);
   }
@@ -171,6 +198,79 @@ app.get("/api/debug/firebase", async (req, res) => {
     project: firebaseApp?.options?.projectId,
     env: { NODE_ENV: process.env.NODE_ENV }
   });
+});
+
+app.get("/api/debug/test-sync-details", async (req, res) => {
+  const steps: string[] = [];
+  try {
+    steps.push("Step 1: Initializing Firebase...");
+    const db = initializeFirebase();
+    if (!db) throw new Error("Firebase initialization failed");
+    steps.push("Firebase initialized successfully.");
+
+    steps.push("Step 2: Getting Google Auth...");
+    const auth = getGoogleAuth();
+    if (!auth) throw new Error("Google credentials are missing in process.env or google-credentials.json");
+    steps.push("Google Auth client created.");
+
+    steps.push("Step 3: Initializing Google Sheets & Drive client...");
+    const { google } = await import("googleapis");
+    const drive = google.drive({ version: 'v3', auth });
+    const sheets = google.sheets({ version: 'v4', auth });
+    steps.push("Google API clients imported and initialized.");
+
+    steps.push("Step 4: Locating spreadsheet...");
+    const { resolveSpreadsheetId } = await import("./google_sheets.js");
+    const spreadsheetId = await resolveSpreadsheetId(drive);
+    steps.push(`Spreadsheet ID resolved to: "${spreadsheetId}"`);
+    if (!spreadsheetId) throw new Error("Spreadsheet was not resolved. Please ensure a sheet is configured or shared.");
+
+    steps.push("Step 5: Inspecting spreadsheet tabs...");
+    const spreadsheet = await sheets.spreadsheets.get({ spreadsheetId });
+    const sheetsList = spreadsheet.data.sheets || [];
+    const titles = sheetsList.map((s: any) => s.properties?.title);
+    steps.push(`Tabs in sheet: ${JSON.stringify(titles)}`);
+
+    steps.push("Step 6: Running active sheet resolution...");
+    const sheetTitle = await getProductionSheetTitle(sheets, spreadsheetId);
+    steps.push(`Active sheet title resolved: "${sheetTitle}"`);
+
+    steps.push("Step 7: Testing reading Pending Orders tab...");
+    try {
+      const resVal = await sheets.spreadsheets.values.get({
+        spreadsheetId,
+        range: 'Pending Orders!A1:C5'
+      });
+      steps.push(`Pending Orders read success, rows found: ${resVal.data.values?.length || 0}`);
+    } catch (e: any) {
+      steps.push(`Pending Orders check failed: ${e.message}`);
+    }
+
+    steps.push("Step 8: Reading document counts from Firestore 'production_records'...");
+    const recordsSnapshot = await getDocs(
+      query(collection(db, "production_records"), orderBy("EntryTimestamp", "asc"), limit(3))
+    );
+    steps.push(`Firestore production_records sample fetch size: ${recordsSnapshot.size}`);
+
+    res.json({
+      success: true,
+      steps,
+      details: {
+        spreadsheetId,
+        sheetTitle,
+        allSheets: titles
+      }
+    });
+
+  } catch (err: any) {
+    steps.push(`ERROR: ${err.message}`);
+    res.status(500).json({
+      success: false,
+      error: err.message,
+      steps,
+      stack: err.stack
+    });
+  }
 });
 
   app.post("/api/debug/seed", async (req, res) => {
@@ -728,6 +828,29 @@ const safeHandler = (fn: (req: any, res: any) => Promise<void>) => async (req: a
   app.get("/api/settings", safeHandler(async (req, res) => {
     const settings = await getRollSettings();
     res.json(settings);
+  }));
+
+  app.get("/api/settings/google-service-account", safeHandler(async (req, res) => {
+    res.json({ email: getServiceAccountEmail() });
+  }));
+
+  app.get("/api/settings/google-sheet-config", safeHandler(async (req, res) => {
+    const db = initializeFirebase();
+    if (!db) return res.json({ spreadsheetId: "" });
+    const d = await getDoc(doc(db, 'app_config', 'sheet'));
+    const data = d.data() || {};
+    res.json({ spreadsheetId: data.spreadsheetId || "" });
+  }));
+
+  app.post("/api/settings/google-sheet-config", safeHandler(async (req, res) => {
+    const db = initializeFirebase();
+    if (!db) return res.status(500).json({ error: "No Database" });
+    const { spreadsheetId } = req.body;
+    await setDoc(doc(db, 'app_config', 'sheet'), { spreadsheetId });
+    // Update the memory cache in google_sheets too so that it takes effect immediately!
+    const { setCachedSpreadsheetId } = await import("./google_sheets.js");
+    setCachedSpreadsheetId(spreadsheetId);
+    res.json({ message: "Google Sheet Config updated", spreadsheetId });
   }));
 
   app.get("/api/settings/date-filter", safeHandler(async (req, res) => {

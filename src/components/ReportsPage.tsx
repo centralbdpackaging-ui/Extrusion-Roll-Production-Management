@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { motion } from 'motion/react';
 import { FileSpreadsheet, Download, Search, Filter, CloudUpload } from 'lucide-react';
 import * as XLSX from 'xlsx';
@@ -136,6 +136,8 @@ export default function ReportsPage({ productionRecords, showToast }: { producti
           </button>
         </div>
       </div>
+
+
 
       <div className="p-4 bg-white rounded-2xl border border-slate-200 flex flex-wrap gap-4 items-end">
         <div className="space-y-1">

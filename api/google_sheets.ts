@@ -5,6 +5,33 @@ import * as XLSX from 'xlsx';
 import fs from 'fs';
 
 // Lazy authentication function
+export function getServiceAccountEmail(): string | null {
+  if (process.env.GOOGLE_SERVICE_ACCOUNT_CREDENTIALS) {
+    try {
+      const credentials = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_CREDENTIALS);
+      return credentials.client_email || null;
+    } catch (error) {
+      console.error("Failed to parse GOOGLE_SERVICE_ACCOUNT_CREDENTIALS for email", error);
+    }
+  }
+
+  const credentialsPath = path.join(process.cwd(), 'google-credentials.json');
+  if (fs.existsSync(credentialsPath)) {
+    try {
+      const credentials = JSON.parse(fs.readFileSync(credentialsPath, 'utf8'));
+      return credentials.client_email || null;
+    } catch (error) {
+      console.error("Failed to read google-credentials.json for email", error);
+    }
+  }
+
+  if (process.env.AUTHORIZED_SERVICE_ACCOUNT_EMAIL) {
+    return process.env.AUTHORIZED_SERVICE_ACCOUNT_EMAIL;
+  }
+
+  return null;
+}
+
 export function getGoogleAuth(): any {
   if (process.env.GOOGLE_SERVICE_ACCOUNT_CREDENTIALS) {
     try {
@@ -24,6 +51,100 @@ export function getGoogleAuth(): any {
       keyFile: credentialsPath,
       scopes: ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive.file', 'https://www.googleapis.com/auth/drive'],
     });
+  }
+
+  // Fallback to Application Default Credentials (ADC) when running inside GCP / Cloud Run environment
+  return new google.auth.GoogleAuth({
+    scopes: ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive.file', 'https://www.googleapis.com/auth/drive'],
+  });
+}
+
+import { initializeApp, getApps } from "firebase/app";
+import { getFirestore, doc, getDoc } from "firebase/firestore";
+
+let sheetsDbInstance: any;
+let cachedSpreadsheetId: string | null = null;
+
+const FALLBACK_CONFIG = {
+  projectId: "extrusion-f736a",
+  appId: "1:1055215837141:web:cf25cc0674aae1b15be75c",
+  apiKey: "AIzaSyCeO4Xpdd1OhLItAL0HtHVoXTi6r20H2nA",
+  authDomain: "extrusion-f736a.firebaseapp.com",
+  firestoreDatabaseId: "(default)",
+  storageBucket: "extrusion-f736a.firebasestorage.app",
+  messagingSenderId: "1055215837141",
+  measurementId: ""
+};
+
+function getSheetsFirebaseDb() {
+  if (sheetsDbInstance) return sheetsDbInstance;
+  try {
+    let config: any = null;
+    const p = path.join(process.cwd(), "firebase-applet-config.json");
+    if (fs.existsSync(p)) {
+      config = JSON.parse(fs.readFileSync(p, "utf-8"));
+    }
+    if (!config || !config.apiKey) {
+      config = FALLBACK_CONFIG;
+    }
+    const appName = "sheets_db_client";
+    const existing = getApps().find(a => a.name === appName);
+    const app = existing || initializeApp(config, appName);
+    const dbId = config.firestoreDatabaseId === "(default)" ? undefined : config.firestoreDatabaseId;
+    sheetsDbInstance = getFirestore(app, dbId);
+    return sheetsDbInstance;
+  } catch (error) {
+    console.error("Sheets Firebase Init Error:", error);
+    return null;
+  }
+}
+
+async function fetchSpreadsheetIdFromDb(): Promise<string | null> {
+  try {
+    const db = getSheetsFirebaseDb();
+    if (!db) return null;
+    const d = await getDoc(doc(db, 'app_config', 'sheet'));
+    if (d.exists()) {
+      return d.data()?.spreadsheetId || null;
+    }
+  } catch (e) {
+    console.error("Error reading spreadsheetId from Firestore in sheets background:", e);
+  }
+  return null;
+}
+
+export function setCachedSpreadsheetId(id: string | null) {
+  cachedSpreadsheetId = id;
+}
+
+export async function resolveSpreadsheetId(drive: any): Promise<string | null> {
+  if (cachedSpreadsheetId) {
+    return cachedSpreadsheetId;
+  }
+
+  try {
+    const dbId = await fetchSpreadsheetIdFromDb();
+    if (dbId) {
+      cachedSpreadsheetId = dbId;
+      return dbId;
+    }
+  } catch (err: any) {
+    console.error("Failed to dynamically fetch SpreadsheetId from DB:", err.message);
+  }
+
+  try {
+    const query = 'name="Production Records (Lifetime)" and mimeType="application/vnd.google-apps.spreadsheet" and trashed=false';
+    const searchRes = await drive.files.list({
+      q: query,
+      fields: 'files(id, name, createdTime)',
+      orderBy: 'createdTime desc'
+    });
+    if (searchRes.data.files && searchRes.data.files.length > 0) {
+      cachedSpreadsheetId = searchRes.data.files[0].id || null;
+      return cachedSpreadsheetId;
+    }
+  } catch (err: any) {
+    console.warn("[Google Sheets] Google Drive API search fell back (make sure Spreadsheet ID is configured in app settings):", err.message);
   }
 
   return null;
@@ -116,16 +237,7 @@ export async function getPendingOrderDetailsMapDirect(): Promise<Map<string, { r
     const drive = google.drive({ version: 'v3', auth });
     const sheets = google.sheets({ version: 'v4', auth });
 
-    let spreadsheetId = null;
-    const query = 'name="Production Records (Lifetime)" and mimeType="application/vnd.google-apps.spreadsheet" and trashed=false';
-    const searchRes = await drive.files.list({
-      q: query,
-      fields: 'files(id, name)'
-    });
-
-    if (searchRes.data.files && searchRes.data.files.length > 0) {
-      spreadsheetId = searchRes.data.files[0].id;
-    }
+    const spreadsheetId = await resolveSpreadsheetId(drive);
 
     if (!spreadsheetId) {
       return new Map();
@@ -148,16 +260,7 @@ export async function getPendingOrderDetailsByPi(piNumber: string): Promise<{ re
     const drive = google.drive({ version: 'v3', auth });
     const sheets = google.sheets({ version: 'v4', auth });
 
-    let spreadsheetId = null;
-    const query = 'name="Production Records (Lifetime)" and mimeType="application/vnd.google-apps.spreadsheet" and trashed=false';
-    const searchRes = await drive.files.list({
-      q: query,
-      fields: 'files(id, name)'
-    });
-
-    if (searchRes.data.files && searchRes.data.files.length > 0) {
-      spreadsheetId = searchRes.data.files[0].id;
-    }
+    const spreadsheetId = await resolveSpreadsheetId(drive);
 
     if (!spreadsheetId) {
       return { retailer: '', customer: '' };
@@ -171,6 +274,39 @@ export async function getPendingOrderDetailsByPi(piNumber: string): Promise<{ re
   }
 }
 
+export async function getProductionSheetTitle(sheets: any, spreadsheetId: string): Promise<string> {
+  try {
+    const spreadsheet = await sheets.spreadsheets.get({ spreadsheetId });
+    const sheetsList = spreadsheet.data.sheets || [];
+    
+    // 1. Look for a sheet containing "Production Reco" (covers Recode, Record, Records, etc.)
+    const match = sheetsList.find((s: any) => {
+       const title = s.properties?.title || '';
+       return /Production\s+Reco/i.test(title);
+    });
+    if (match && match.properties?.title) {
+       return match.properties.title;
+    }
+    
+    // 2. Look for "Sheet1"
+    const sheet1Match = sheetsList.find((s: any) => {
+       const title = s.properties?.title || '';
+       return /Sheet1/i.test(title);
+    });
+    if (sheet1Match && sheet1Match.properties?.title) {
+       return sheet1Match.properties.title;
+    }
+
+    // 3. Fallback to the title of the very first sheet
+    if (sheetsList.length > 0 && sheetsList[0].properties?.title) {
+       return sheetsList[0].properties.title;
+    }
+  } catch (error) {
+    console.error("Error fetching sheet titles, defaulting to 'Production Records':", error);
+  }
+  return 'Production Records';
+}
+
 export async function syncToGoogleSheets(entry: any) {
   try {
     const auth = getGoogleAuth();
@@ -182,59 +318,50 @@ export async function syncToGoogleSheets(entry: any) {
     const sheets = google.sheets({ version: 'v4', auth });
 
     // 1. Find the spreadsheet
-    let spreadsheetId = null;
-    const query = 'name="Production Records (Lifetime)" and mimeType="application/vnd.google-apps.spreadsheet" and trashed=false';
-    const searchRes = await drive.files.list({
-      q: query,
-      fields: 'files(id, name)'
-    });
-
-    if (searchRes.data.files && searchRes.data.files.length > 0) {
-      spreadsheetId = searchRes.data.files[0].id;
-    }
+    const spreadsheetId = await resolveSpreadsheetId(drive);
 
     if (!spreadsheetId) {
-        console.error("Spreadsheet not found. Please create a sheet named 'Production Records (Lifetime)' and share it with the service account.");
+        console.error("Spreadsheet not found. Please create a sheet named 'Production Records (Lifetime)' and share it with the service account or configure its ID in settings.");
         return;
     }
+
+    const sheetTitle = await getProductionSheetTitle(sheets, spreadsheetId);
 
     // Check if headers exist
     const headerRes = await sheets.spreadsheets.values.get({
        spreadsheetId,
-       range: 'A1:U1'
+       range: `${sheetTitle}!A1:Z1`
     });
 
-    const standardHeaders = ['Entry Timestamp', 'Roll ID', 'Date', 'Shift', 'Production Type', 'Operator ID', 'Operator Name', 'Machine No', 'Year', 'PI Number', 'Tube Size', 'UOM', 'Material', 'Micron', 'InLine Print', 'Finished Meter', 'Finished Kgs', 'Scrap Kgs', 'Roll Location', 'Retailer', 'Customer'];
+    const standardHeaders = [
+        'Entry Timestamp', 'Roll ID', 'Production Date', 'Shift', 'Production Type', 
+        'Operator ID', 'Operator Name', 'Machine No', 'Year', 'PI Number', 
+        'Tube Size', 'UOM', 'Material', 'Micron', 'InLine Print', 
+        'Finished Meter', 'Finished Kgs', 'Scrap Kgs', 'Roll Location', 'Retailer', 
+        'Customer', 'Data Update Time', 'Fingerprint', 'Entered By', 
+        'Production Year', 'Production Month'
+    ];
 
     if (!headerRes.data.values || headerRes.data.values.length === 0) {
        // Add headers automatically
        await sheets.spreadsheets.values.update({
           spreadsheetId,
-          range: 'A1:U1',
+          range: `${sheetTitle}!A1:Z1`,
           valueInputOption: 'USER_ENTERED',
           requestBody: {
              values: [standardHeaders]
           }
        });
     } else {
-       // Check if Retailer and Customer headers already exist, if not, update header row to include them
-       const currentHeaders = headerRes.data.values[0] || [];
-       if (!currentHeaders.includes('Retailer') || !currentHeaders.includes('Customer')) {
-         const newHeaders = [...currentHeaders];
-         while (newHeaders.length < 19) {
-           newHeaders.push('');
-         }
-         newHeaders[19] = 'Retailer';
-         newHeaders[20] = 'Customer';
-         await sheets.spreadsheets.values.update({
-            spreadsheetId,
-            range: 'A1:U1',
-            valueInputOption: 'USER_ENTERED',
-            requestBody: {
-               values: [newHeaders]
-            }
-         });
-       }
+       // Update header row to include ALL columns
+       await sheets.spreadsheets.values.update({
+          spreadsheetId,
+          range: `${sheetTitle}!A1:Z1`,
+          valueInputOption: 'USER_ENTERED',
+          requestBody: {
+             values: [standardHeaders]
+          }
+       });
     }
 
     // 3. Append row
@@ -262,13 +389,18 @@ export async function syncToGoogleSheets(entry: any) {
          entry.FinishedKgs || '',
          entry.ScrapKgs || '',
          entry.RollLocation || '',
-         match.retailer,
-         match.customer
+         match.retailer || '',
+         match.customer || '',
+         entry.DataUpdateTime || '',
+         entry.Fingerprint || '',
+         entry.EnteredBy || '',
+         entry.ProductionYear || '',
+         entry.ProductionMonth || ''
       ];
       
       await sheets.spreadsheets.values.append({
          spreadsheetId,
-         range: 'A1',
+         range: `${sheetTitle}!A1`,
          valueInputOption: 'USER_ENTERED',
          requestBody: {
             values: [rowData]
@@ -294,101 +426,76 @@ export async function syncMultipleToGoogleSheets(entries: any[]) {
     const sheets = google.sheets({ version: 'v4', auth });
 
     // 1. Find the spreadsheet
-    let spreadsheetId = null;
-    const query = 'name="Production Records (Lifetime)" and mimeType="application/vnd.google-apps.spreadsheet" and trashed=false';
-    const searchRes = await drive.files.list({
-      q: query,
-      fields: 'files(id, name)'
-    });
-
-    if (searchRes.data.files && searchRes.data.files.length > 0) {
-      spreadsheetId = searchRes.data.files[0].id;
-    }
+    const spreadsheetId = await resolveSpreadsheetId(drive);
 
     if (!spreadsheetId) {
-        console.error("Spreadsheet not found. Please create a sheet named 'Production Records (Lifetime)' and share it with the service account.");
+        console.error("Spreadsheet not found. Please create a sheet named 'Production Records (Lifetime)' and share it with the service account or configure its ID in settings.");
         return;
     }
 
-    // Check if headers exist
-    const headerRes = await sheets.spreadsheets.values.get({
+    const sheetTitle = await getProductionSheetTitle(sheets, spreadsheetId);
+
+    // 2. Clear all values in the sheet
+    await sheets.spreadsheets.values.clear({
        spreadsheetId,
-       range: 'A1:U1'
+       range: `${sheetTitle}!A1:Z100000`,
     });
 
-    const standardHeaders = ['Entry Timestamp', 'Roll ID', 'Date', 'Shift', 'Production Type', 'Operator ID', 'Operator Name', 'Machine No', 'Year', 'PI Number', 'Tube Size', 'UOM', 'Material', 'Micron', 'InLine Print', 'Finished Meter', 'Finished Kgs', 'Scrap Kgs', 'Roll Location', 'Retailer', 'Customer'];
+    const standardHeaders = [
+        'Entry Timestamp', 'Roll ID', 'Production Date', 'Shift', 'Production Type', 
+        'Operator ID', 'Operator Name', 'Machine No', 'Year', 'PI Number', 
+        'Tube Size', 'UOM', 'Material', 'Micron', 'InLine Print', 
+        'Finished Meter', 'Finished Kgs', 'Scrap Kgs', 'Roll Location', 'Retailer', 
+        'Customer', 'Data Update Time', 'Fingerprint', 'Entered By', 
+        'Production Year', 'Production Month'
+    ];
 
-    if (!headerRes.data.values || headerRes.data.values.length === 0) {
-       // Add headers automatically
-       await sheets.spreadsheets.values.update({
-          spreadsheetId,
-          range: 'A1:U1',
-          valueInputOption: 'USER_ENTERED',
-          requestBody: {
-             values: [standardHeaders]
-          }
-       });
-    } else {
-       // Check if Retailer and Customer headers already exist, if not, update header row to include them
-       const currentHeaders = headerRes.data.values[0] || [];
-       if (!currentHeaders.includes('Retailer') || !currentHeaders.includes('Customer')) {
-         const newHeaders = [...currentHeaders];
-         while (newHeaders.length < 19) {
-           newHeaders.push('');
-         }
-         newHeaders[19] = 'Retailer';
-         newHeaders[20] = 'Customer';
-         await sheets.spreadsheets.values.update({
-            spreadsheetId,
-            range: 'A1:U1',
-            valueInputOption: 'USER_ENTERED',
-            requestBody: {
-               values: [newHeaders]
-            }
-         });
+    // 3. Construct all rows
+    const piDetailsMap = await getPendingOrderDetailsMap(sheets, spreadsheetId);
+
+    const rowsData = entries.map(entry => {
+       const match = getMatchedDetails(piDetailsMap, entry.PINumber);
+       return [
+          entry.EntryTimestamp || new Date().toISOString(),
+          entry.RollID || '',
+          entry.ProductionDate || '',
+          entry.Shift || '',
+          entry.ProductionType || '',
+          entry.OperatorID || '',
+          entry.OperatorName || '',
+          entry.MachineNo || '',
+          entry.Year || '',
+          entry.PINumber || '',
+          entry.TubeSize || '',
+          entry.UOM || '',
+          entry.Material || '',
+          entry.Micron || '',
+          entry.InLinePrint || '',
+          entry.FinishedMeter || '',
+          entry.FinishedKgs || '',
+          entry.ScrapKgs || '',
+          entry.RollLocation || '',
+          match.retailer || '',
+          match.customer || '',
+          entry.DataUpdateTime || '',
+          entry.Fingerprint || '',
+          entry.EnteredBy || '',
+          entry.ProductionYear || '',
+          entry.ProductionMonth || ''
+       ];
+    });
+
+    // 4. Update the entire sheet with headers AND rows
+    await sheets.spreadsheets.values.update({
+       spreadsheetId,
+       range: `${sheetTitle}!A1`,
+       valueInputOption: 'USER_ENTERED',
+       requestBody: {
+          values: [standardHeaders, ...rowsData]
        }
-    }
+    });
 
-    // 3. Append rows
-    if (spreadsheetId && entries.length > 0) {
-      const piDetailsMap = await getPendingOrderDetailsMap(sheets, spreadsheetId);
-
-      const rowsData = entries.map(entry => {
-         const match = getMatchedDetails(piDetailsMap, entry.PINumber);
-         return [
-            entry.EntryTimestamp || new Date().toISOString(),
-            entry.RollID || '',
-            entry.ProductionDate || '',
-            entry.Shift || '',
-            entry.ProductionType || '',
-            entry.OperatorID || '',
-            entry.OperatorName || '',
-            entry.MachineNo || '',
-            entry.Year || '',
-            entry.PINumber || '',
-            entry.TubeSize || '',
-            entry.UOM || '',
-            entry.Material || '',
-            entry.Micron || '',
-            entry.InLinePrint || '',
-            entry.FinishedMeter || '',
-            entry.FinishedKgs || '',
-            entry.ScrapKgs || '',
-            entry.RollLocation || '',
-            match.retailer,
-            match.customer
-         ];
-      });
-      
-      await sheets.spreadsheets.values.append({
-         spreadsheetId,
-         range: 'A1',
-         valueInputOption: 'USER_ENTERED',
-         requestBody: {
-            values: rowsData
-         }
-      });
-    }
+    console.log(`[Google Sheets Batch Sync] Reassembled & synchronized ${entries.length} records into standard sheet "${sheetTitle}".`);
   } catch (err: any) {
     console.error("Error batch syncing to Google Sheets:", err.message);
     if (err.response && err.response.data) {
@@ -408,19 +515,10 @@ export async function syncMachineLogToGoogleSheets(log: any) {
     const sheets = google.sheets({ version: 'v4', auth });
 
     // 1. Find the spreadsheet
-    let spreadsheetId = null;
-    const query = 'name="Production Records (Lifetime)" and mimeType="application/vnd.google-apps.spreadsheet" and trashed=false';
-    const searchRes = await drive.files.list({
-      q: query,
-      fields: 'files(id, name)'
-    });
-
-    if (searchRes.data.files && searchRes.data.files.length > 0) {
-      spreadsheetId = searchRes.data.files[0].id;
-    }
+    const spreadsheetId = await resolveSpreadsheetId(drive);
 
     if (!spreadsheetId) {
-        console.error("Spreadsheet not found. Please create a sheet named 'Production Records (Lifetime)' and share it with the service account.");
+        console.error("Spreadsheet not found. Please create a sheet named 'Production Records (Lifetime)' and share it with the service account or configure its ID in settings.");
         return;
     }
 
@@ -545,16 +643,7 @@ export async function syncMultipleMachineLogsToGoogleSheets(logs: any[]) {
     const sheets = google.sheets({ version: 'v4', auth });
 
     // 1. Find the spreadsheet
-    let spreadsheetId = null;
-    const query = 'name="Production Records (Lifetime)" and mimeType="application/vnd.google-apps.spreadsheet" and trashed=false';
-    const searchRes = await drive.files.list({
-      q: query,
-      fields: 'files(id, name)'
-    });
-
-    if (searchRes.data.files && searchRes.data.files.length > 0) {
-      spreadsheetId = searchRes.data.files[0].id;
-    }
+    const spreadsheetId = await resolveSpreadsheetId(drive);
 
     if (!spreadsheetId) {
         console.error("Spreadsheet not found.");
@@ -637,16 +726,7 @@ export async function syncDashboardToGoogleSheets(summary: any[]) {
     const sheets = google.sheets({ version: 'v4', auth });
 
     // 1. Find the spreadsheet
-    let spreadsheetId = null;
-    const query = 'name="Production Records (Lifetime)" and mimeType="application/vnd.google-apps.spreadsheet" and trashed=false';
-    const searchRes = await drive.files.list({
-      q: query,
-      fields: 'files(id, name)'
-    });
-
-    if (searchRes.data.files && searchRes.data.files.length > 0) {
-      spreadsheetId = searchRes.data.files[0].id;
-    }
+    const spreadsheetId = await resolveSpreadsheetId(drive);
 
     if (!spreadsheetId) {
         console.error("Spreadsheet 'Production Records (Lifetime)' not found.");
@@ -742,16 +822,7 @@ export async function syncUpdatedEntryToGoogleSheets(entry: any) {
     const sheets = google.sheets({ version: 'v4', auth });
 
     // 1. Find the spreadsheet
-    let spreadsheetId = null;
-    const query = 'name="Production Records (Lifetime)" and mimeType="application/vnd.google-apps.spreadsheet" and trashed=false';
-    const searchRes = await drive.files.list({
-      q: query,
-      fields: 'files(id, name)'
-    });
-
-    if (searchRes.data.files && searchRes.data.files.length > 0) {
-      spreadsheetId = searchRes.data.files[0].id;
-    }
+    const spreadsheetId = await resolveSpreadsheetId(drive);
 
     if (!spreadsheetId) {
         console.error("Spreadsheet not found.");
@@ -764,10 +835,12 @@ export async function syncUpdatedEntryToGoogleSheets(entry: any) {
       return;
     }
 
+    const sheetTitle = await getProductionSheetTitle(sheets, spreadsheetId);
+
     // 2. Fetch the Roll ID column B to locate the row
     const rollIdsRes = await sheets.spreadsheets.values.get({
        spreadsheetId,
-       range: 'B:B'
+       range: `${sheetTitle}!B:B`
     });
 
     const values = rollIdsRes.data.values || [];
@@ -809,21 +882,26 @@ export async function syncUpdatedEntryToGoogleSheets(entry: any) {
        entry.FinishedKgs || '',
        entry.ScrapKgs || '',
        entry.RollLocation || '',
-       match.retailer,
-       match.customer
+       match.retailer || '',
+       match.customer || '',
+       entry.DataUpdateTime || '',
+       entry.Fingerprint || '',
+       entry.EnteredBy || '',
+       entry.ProductionYear || '',
+       entry.ProductionMonth || ''
     ];
 
-    // 4. Update the exact row range (e.g. A22:U22)
+    // 4. Update the exact row range (e.g. A22:Z22)
     await sheets.spreadsheets.values.update({
        spreadsheetId,
-       range: `A${rowIndex}:U${rowIndex}`,
+       range: `${sheetTitle}!A${rowIndex}:Z${rowIndex}`,
        valueInputOption: 'USER_ENTERED',
        requestBody: {
           values: [rowData]
        }
     });
 
-    console.log(`[Google Sheets Update Sync] Successfully updated Roll ID ${rollId} at row ${rowIndex}.`);
+    console.log(`[Google Sheets Update Sync] Successfully updated Roll ID ${rollId} at row ${rowIndex} in sheet "${sheetTitle}".`);
   } catch (err: any) {
     console.error("Error updating entry in Google Sheets:", err.message);
   }
@@ -839,39 +917,22 @@ export async function uploadPendingOrdersToGoogleSheets(base64Content: string, f
     const sheets = google.sheets({ version: 'v4', auth });
 
     // 1. Find the spreadsheet
-    let spreadsheetId = null;
-    const query = 'name="Production Records (Lifetime)" and mimeType="application/vnd.google-apps.spreadsheet" and trashed=false';
-    const searchRes = await drive.files.list({
-      q: query,
-      fields: 'files(id, name)'
-    });
-
-    if (searchRes.data.files && searchRes.data.files.length > 0) {
-      spreadsheetId = searchRes.data.files[0].id;
-    }
+    const spreadsheetId = await resolveSpreadsheetId(drive);
 
     if (!spreadsheetId) {
-      throw new Error("Spreadsheet 'Production Records (Lifetime)' not found. Please ensure it exists and is shared.");
+      throw new Error("Spreadsheet 'Production Records (Lifetime)' not found. Please ensure it exists and is shared or configure its ID in settings.");
     }
 
-    // 2. Ensure "Pending Orders" exists, and delete "Pending Orders Metadata" if it exists
+    // 2. Ensure "Pending Orders" exists
     const spreadsheet = await sheets.spreadsheets.get({ spreadsheetId });
     const sheetsList = spreadsheet.data.sheets || [];
     const hasSheet = sheetsList.some(s => s.properties?.title === 'Pending Orders');
-    const metaSheet = sheetsList.find(s => s.properties?.title === 'Pending Orders Metadata');
 
     const requests: any[] = [];
     if (!hasSheet) {
       requests.push({
         addSheet: {
           properties: { title: 'Pending Orders' }
-        }
-      });
-    }
-    if (metaSheet && metaSheet.properties?.sheetId !== undefined) {
-      requests.push({
-        deleteSheet: {
-          sheetId: metaSheet.properties.sheetId
         }
       });
     }
@@ -1050,16 +1111,7 @@ export async function deletePendingOrdersFromGoogleSheets() {
     const sheets = google.sheets({ version: 'v4', auth });
 
     // 1. Find spreadsheet
-    let spreadsheetId = null;
-    const query = 'name="Production Records (Lifetime)" and mimeType="application/vnd.google-apps.spreadsheet" and trashed=false';
-    const searchRes = await drive.files.list({
-      q: query,
-      fields: 'files(id, name)'
-    });
-
-    if (searchRes.data.files && searchRes.data.files.length > 0) {
-      spreadsheetId = searchRes.data.files[0].id;
-    }
+    const spreadsheetId = await resolveSpreadsheetId(drive);
 
     if (!spreadsheetId) return false;
 
@@ -1068,23 +1120,6 @@ export async function deletePendingOrdersFromGoogleSheets() {
       spreadsheetId,
       range: 'Pending Orders!A1:Z50000'
     });
-
-    // Also look for "Pending Orders Metadata" tab and delete it if it exists
-    const spreadsheet = await sheets.spreadsheets.get({ spreadsheetId });
-    const sheetsList = spreadsheet.data.sheets || [];
-    const metaSheet = sheetsList.find(s => s.properties?.title === 'Pending Orders Metadata');
-    if (metaSheet && metaSheet.properties?.sheetId !== undefined) {
-      await sheets.spreadsheets.batchUpdate({
-        spreadsheetId,
-        requestBody: {
-          requests: [{
-            deleteSheet: {
-              sheetId: metaSheet.properties.sheetId
-            }
-          }]
-        }
-      });
-    }
 
     return true;
   } catch (err: any) {

@@ -44,6 +44,7 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import { cn, formatDate, getShiftAndDateForDhaka, normalizeDateString } from './lib/utils';
 import { QRCodeSVG } from 'qrcode.react';
+import * as XLSX from 'xlsx';
 import ReportsPage from './components/ReportsPage';
 import BreakdownDataTable from './components/BreakdownDataTable';
 import PendingOrderPage from './components/PendingOrderPage';
@@ -338,8 +339,8 @@ export default function App() {
           setDashboardDateFilter(data.dateFilter);
           filter = data.dateFilter;
         }
-      } catch (err) {
-        console.error("Failed to sync date filter on interval", err);
+      } catch (err: any) {
+        console.error("Failed to sync date filter on interval. Error:", err.message);
       }
       fetchDashboard(filter || undefined);
       fetchRecentEntries();
@@ -416,6 +417,8 @@ export default function App() {
       if (res.ok && Array.isArray(data)) {
         const sorted = [...data].sort((a, b) => new Date(b.EntryTimestamp).getTime() - new Date(a.EntryTimestamp).getTime());
         setProductionRecords(sorted);
+        console.log("Production records count:", sorted.length);
+        if (sorted.length > 0) console.log("First record:", sorted[0]);
       } else {
         setProductionRecords([]);
       }
@@ -766,7 +769,16 @@ export default function App() {
   const currentProductionDateStr = dashboardDateFilter || dhakaShiftInfo.productionDate; // e.g. "2026-05-22"
 
   // Filter records belonging to the current operational date
-  const todayRecords = productionRecords.filter((record: any) => normalizeDateString(record.ProductionDate) === currentProductionDateStr);
+  const todayRecords = dashboardDateFilter 
+    ? productionRecords.filter((record: any) => normalizeDateString(record.ProductionDate) === dashboardDateFilter)
+    : productionRecords.filter((record: any) => {
+        const normalized = normalizeDateString(record.ProductionDate);
+        if (normalized !== currentProductionDateStr && record.Shift === 'Day') {
+            console.log("Date mismatch:", record.ProductionDate, "->", normalized, "vs", currentProductionDateStr);
+        }
+        return normalized === currentProductionDateStr;
+      });
+
 
   // Day shift records for the current operational date
   const todayDayRecords = todayRecords.filter((record: any) => record.Shift === 'Day');
@@ -1121,6 +1133,9 @@ export default function App() {
               >
                 {/* Stats Grid */}
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                   <div className="col-span-full p-2 bg-yellow-100 text-yellow-800 text-xs font-mono rounded">
+                      Debug: Total Records: {productionRecords.length}, Today Records: {todayRecords.length}, Date: {currentProductionDateStr}
+                   </div>
                    <StatCard 
                     title="Daily Combined Output" 
                     value={todayTotalKgs.toFixed(1)} 
@@ -1510,7 +1525,7 @@ export default function App() {
                         
                         <SelectField label="Year" name="Year" value={formData.Year} onChange={handleInputChange} options={masterStore.years} icon={<CalendarIcon size={14} />} placeholder="Type Here" clearable={false} />
                         <InputField label="PI Number" name="PINumber" value={formData.PINumber} onChange={handleInputChange} icon={<Hash size={14} />} placeholder="Type Here" />
-                        <InputField label="Tube Size" name="TubeSize" type="number" step="0.01" value={formData.TubeSize} onChange={handleInputChange} icon={<Ruler size={14} />} placeholder="Type Here" />
+                        <InputField label="Tube Size" name="TubeSize" type="text" value={formData.TubeSize} onChange={handleInputChange} icon={<Ruler size={14} />} placeholder="Type Here" />
                         
                         <SelectField label="UOM" name="UOM" value={formData.UOM} onChange={handleInputChange} options={masterStore.uoms} icon={<Ruler size={14} />} placeholder="Type Here" />
                         <SelectField label="Raw Material" name="Material" value={formData.Material} onChange={handleInputChange} options={masterStore.materials} icon={<Layers size={14} />} placeholder="Type Here" />
@@ -2434,6 +2449,35 @@ export default function App() {
                       Import Excel
                     </label>
                     <button 
+                      onClick={() => {
+                        const headersOrder = [
+                          'EntryTimestamp', 'RollID', 'ProductionDate', 'Shift', 'ProductionType', 
+                          'OperatorID', 'OperatorName', 'MachineNo', 'Year', 'PINumber', 
+                          'TubeSize', 'UOM', 'Material', 'Micron', 'InLinePrint', 
+                          'FinishedMeter', 'FinishedKgs', 'ScrapKgs', 'RollLocation', 
+                          'Retailer', 'Customer', 'DataUpdateTime', 'Fingerprint', 
+                          'EnteredBy', 'ProductionYear', 'ProductionMonth'
+                        ];
+
+                        const formattedData = productionRecords.map((record: any) => {
+                          const row: any = {};
+                          headersOrder.forEach(key => {
+                            row[key] = record[key] || '';
+                          });
+                          return row;
+                        });
+
+                        const ws = XLSX.utils.json_to_sheet(formattedData, { header: headersOrder });
+                        const wb = XLSX.utils.book_new();
+                        XLSX.utils.book_append_sheet(wb, ws, "ProductionRecords");
+                        XLSX.writeFile(wb, "ProductionRecords.xlsx");
+                      }}
+                      className="px-4 py-2 bg-white border border-slate-200 rounded-xl text-[10px] font-black uppercase tracking-widest text-slate-600 hover:bg-slate-50 transition-all flex items-center gap-2"
+                    >
+                      <FileSpreadsheet size={14} />
+                      Export Excel
+                    </button>
+                    <button 
                       onClick={() => fetchProductionRecords()}
                       className="px-4 py-2 bg-white border border-slate-200 rounded-xl text-[10px] font-black uppercase tracking-widest text-slate-600 hover:bg-slate-50 transition-all flex items-center gap-2"
                     >
@@ -2488,16 +2532,16 @@ export default function App() {
                       <thead>
                         <tr className="bg-slate-50 border-b border-slate-100">
                           <th className="px-4 py-4 text-[9px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap sticky left-0 bg-slate-50 z-10 border-r border-slate-200 shadow-sm text-center">Action</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Entry Timestamp</th>
                           <th className="px-4 py-4 text-[9px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Roll ID</th>
                           <th className="px-4 py-4 text-[9px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Production Date</th>
                           <th className="px-4 py-4 text-[9px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Shift</th>
                           <th className="px-4 py-4 text-[9px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Production Type</th>
                           <th className="px-4 py-4 text-[9px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Operator ID</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Operator Name</th>
                           <th className="px-4 py-4 text-[9px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Machine No</th>
                           <th className="px-4 py-4 text-[9px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Year</th>
                           <th className="px-4 py-4 text-[9px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">PI Number</th>
-                          <th className="px-4 py-4 text-[9px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Retailer</th>
-                          <th className="px-4 py-4 text-[9px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Customer</th>
                           <th className="px-4 py-4 text-[9px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Tube Size</th>
                           <th className="px-4 py-4 text-[9px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">UOM</th>
                           <th className="px-4 py-4 text-[9px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Material</th>
@@ -2505,12 +2549,13 @@ export default function App() {
                           <th className="px-4 py-4 text-[9px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">InLine Print</th>
                           <th className="px-4 py-4 text-[9px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Finished Meter</th>
                           <th className="px-4 py-4 text-[9px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Finished KG</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Scrap Kgs</th>
                           <th className="px-4 py-4 text-[9px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Roll Location</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Retailer</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Customer</th>
                           <th className="px-4 py-4 text-[9px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Data Update Time</th>
                           <th className="px-4 py-4 text-[9px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Fingerprint</th>
                           <th className="px-4 py-4 text-[9px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Entered By</th>
-                          <th className="px-4 py-4 text-[9px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Operator Name</th>
-                          <th className="px-4 py-4 text-[9px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Scrap Kgs</th>
                           <th className="px-4 py-4 text-[9px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Production Year</th>
                           <th className="px-4 py-4 text-[9px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Production Month</th>
                         </tr>
@@ -2538,16 +2583,16 @@ export default function App() {
                                 Edit
                               </button>
                             </td>
+                            <td className="px-4 py-3 text-[10px] font-mono text-slate-500">{record.EntryTimestamp}</td>
                             <td className="px-4 py-3"><span className="font-mono text-[11px] font-black text-brand-primary">{record.RollID}</span></td>
                             <td className="px-4 py-3 text-[11px] font-bold text-slate-700">{record.ProductionDate}</td>
                             <td className="px-4 py-3 text-[11px] font-medium text-slate-900">{record.Shift}</td>
                             <td className="px-4 py-3 text-[11px] font-medium text-slate-900">{record.ProductionType}</td>
                             <td className="px-4 py-3 text-[11px] font-medium text-slate-900">{record.OperatorID}</td>
+                            <td className="px-4 py-3 text-[11px] font-bold text-slate-900">{record.OperatorName}</td>
                             <td className="px-4 py-3 text-[11px] font-bold text-slate-900">{record.MachineNo}</td>
                             <td className="px-4 py-3 text-[11px] font-medium text-slate-900">{record.Year}</td>
                             <td className="px-4 py-3 text-[11px] font-medium text-slate-900">{record.PINumber || 'N/A'}</td>
-                            <td className="px-4 py-3 text-[11px] font-bold text-slate-800 bg-slate-50/40">{record.Retailer || 'N/A'}</td>
-                            <td className="px-4 py-3 text-[11px] font-bold text-slate-800 bg-slate-50/40">{record.Customer || 'N/A'}</td>
                             <td className="px-4 py-3 text-[11px] font-medium text-slate-900">{record.TubeSize} mm</td>
                             <td className="px-4 py-3 text-[11px] font-medium text-slate-900">{record.UOM}</td>
                             <td className="px-4 py-3 text-[11px] font-medium text-slate-900">{record.Material}</td>
@@ -2555,12 +2600,13 @@ export default function App() {
                             <td className="px-4 py-3 text-[11px] font-medium text-slate-900">{record.InLinePrint}</td>
                             <td className="px-4 py-3 text-[11px] font-bold text-slate-900">{record.FinishedMeter} M</td>
                             <td className="px-4 py-3 text-[11px] font-bold text-brand-primary">{record.FinishedKgs} KG</td>
+                            <td className="px-4 py-3 text-[11px] font-medium text-rose-500 font-bold">{record.ScrapKgs} KG</td>
                             <td className="px-4 py-3 text-[11px] font-medium text-slate-900">{record.RollLocation}</td>
+                            <td className="px-4 py-3 text-[11px] font-bold text-slate-800 bg-slate-50/40">{record.Retailer || 'N/A'}</td>
+                            <td className="px-4 py-3 text-[11px] font-bold text-slate-800 bg-slate-50/40">{record.Customer || 'N/A'}</td>
                             <td className="px-4 py-3 text-[10px] font-mono font-medium text-slate-400">{record.DataUpdateTime}</td>
                             <td className="px-4 py-3 text-[10px] font-mono text-slate-400">{record.Fingerprint}</td>
                             <td className="px-4 py-3 text-[11px] font-medium text-slate-500">{record.EnteredBy}</td>
-                            <td className="px-4 py-3 text-[11px] font-bold text-slate-900">{record.OperatorName}</td>
-                            <td className="px-4 py-3 text-[11px] font-medium text-rose-500 font-bold">{record.ScrapKgs} KG</td>
                             <td className="px-4 py-3 text-[11px] font-medium text-slate-600">{record.ProductionYear}</td>
                             <td className="px-4 py-3 text-[11px] font-medium text-slate-600">{record.ProductionMonth}</td>
                           </tr>
@@ -2833,8 +2879,7 @@ export default function App() {
                     <div className="space-y-1">
                       <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Tube Size (mm)</label>
                       <input 
-                        type="number" 
-                        step="0.01"
+                        type="text" 
                         required
                         value={editingEntry.TubeSize || ""} 
                         onChange={(e) => setEditingEntry({ ...editingEntry, TubeSize: e.target.value })}
