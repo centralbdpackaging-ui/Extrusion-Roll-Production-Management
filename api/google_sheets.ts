@@ -279,32 +279,32 @@ export async function getProductionSheetTitle(sheets: any, spreadsheetId: string
     const spreadsheet = await sheets.spreadsheets.get({ spreadsheetId });
     const sheetsList = spreadsheet.data.sheets || [];
     
-    // 1. Look for a sheet containing "Production Reco" (covers Recode, Record, Records, etc.)
+    // Check if "Master Production" sheet tab already exists
     const match = sheetsList.find((s: any) => {
        const title = s.properties?.title || '';
-       return /Production\s+Reco/i.test(title);
+       return title.trim().toLowerCase() === 'master production';
     });
     if (match && match.properties?.title) {
        return match.properties.title;
     }
     
-    // 2. Look for "Sheet1"
-    const sheet1Match = sheetsList.find((s: any) => {
-       const title = s.properties?.title || '';
-       return /Sheet1/i.test(title);
+    // If it does not exist, create a new sheet tab named "Master Production"
+    await sheets.spreadsheets.batchUpdate({
+       spreadsheetId,
+       requestBody: {
+          requests: [{
+             addSheet: {
+                properties: { title: 'Master Production' }
+             }
+          }]
+       }
     });
-    if (sheet1Match && sheet1Match.properties?.title) {
-       return sheet1Match.properties.title;
-    }
-
-    // 3. Fallback to the title of the very first sheet
-    if (sheetsList.length > 0 && sheetsList[0].properties?.title) {
-       return sheetsList[0].properties.title;
-    }
+    console.log("Created 'Master Production' sheet tab in spreadsheet.");
+    return 'Master Production';
   } catch (error) {
-    console.error("Error fetching sheet titles, defaulting to 'Production Records':", error);
+    console.error("Error fetching/creating 'Master Production' sheet, defaulting to 'Master Production':", error);
   }
-  return 'Production Records';
+  return 'Master Production';
 }
 
 export async function syncToGoogleSheets(entry: any) {
