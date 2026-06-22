@@ -118,6 +118,10 @@ export function setCachedSpreadsheetId(id: string | null) {
 }
 
 export async function resolveSpreadsheetId(drive: any): Promise<string | null> {
+  if (process.env.SPREADSHEET_ID) {
+    return process.env.SPREADSHEET_ID;
+  }
+  
   if (cachedSpreadsheetId) {
     return cachedSpreadsheetId;
   }

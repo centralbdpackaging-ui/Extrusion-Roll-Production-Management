@@ -63,11 +63,19 @@ const initializeFirebase = () => {
         path.join(__dirname, "..", "firebase-applet-config.json")
       ];
       
+      console.log("[Firebase] Checking paths for config:", paths);
       for (const p of paths) {
         if (fs.existsSync(p)) {
           console.log("[Firebase] Loading from file:", p);
-          config = JSON.parse(fs.readFileSync(p, "utf-8"));
-          break;
+          try {
+            config = JSON.parse(fs.readFileSync(p, "utf-8"));
+            console.log("[Firebase] Successfully parsed config file.");
+            break;
+          } catch(e) {
+            console.error("[Firebase] Failed to parse config file:", e);
+          }
+        } else {
+          console.log("[Firebase] File not found at:", p);
         }
       }
     }
@@ -76,6 +84,8 @@ const initializeFirebase = () => {
     if (!config || !config.apiKey) {
       console.warn("[Firebase] Config not found in ENV or FILES. Using Fallback.");
       config = FALLBACK_CONFIG;
+    } else {
+      console.log("[Firebase] Config loaded successfully. Project ID:", config.projectId);
     }
 
     if (config && config.apiKey) {
@@ -988,11 +998,11 @@ const safeHandler = (fn: (req: any, res: any) => Promise<void>) => async (req: a
       entry: newEntry 
     });
 
-    // Cleanup data older than 3 days (72 hours) from Firestore
+    // Cleanup data older than 30 days (720 hours) from Firestore
     (async () => {
       try {
-         const threeDaysAgo = new Date(Date.now() - 72 * 60 * 60 * 1000).toISOString();
-         const oldQuery = query(collection(db, 'production_records'), where('EntryTimestamp', '<', threeDaysAgo));
+         const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+         const oldQuery = query(collection(db, 'production_records'), where('EntryTimestamp', '<', thirtyDaysAgo));
          const oldDocs = await getDocs(oldQuery);
          if (!oldDocs.empty) {
             const batch = writeBatch(db);
