@@ -84,16 +84,19 @@ export default function ReportsPage({ productionRecords, showToast }: { producti
   }, [filteredRecords]);
 
   const exportToExcel = () => {
-    if (summaryRecords.length === 0) return;
+    if (filteredRecords.length === 0) return;
     
     // Prepare data for export
-    const exportData = summaryRecords.map(record => ({
-      'Date': record.Date,
+    const exportData = filteredRecords.map(record => ({
+      'Date': record.ProductionDate,
+      'Shift': record.Shift,
       'Machine No': record.MachineNo,
+      'Operator': record.OperatorName,
+      'PINumber': record.PINumber,
       'Finished Meter': record.FinishedMeter,
-      'Finished KG': record.FinishedKG,
-      'Total Roll': record.TotalRoll,
-      'Scrap KG': record.ScrapKG,
+      'Finished KG': record.FinishedKgs,
+      'Scrap KG': record.ScrapKgs,
+      'RollID': record.RollID,
     }));
 
     const worksheet = XLSX.utils.json_to_sheet(exportData);

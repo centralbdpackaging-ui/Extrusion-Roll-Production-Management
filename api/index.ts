@@ -998,24 +998,6 @@ const safeHandler = (fn: (req: any, res: any) => Promise<void>) => async (req: a
       entry: newEntry 
     });
 
-    // Cleanup data older than 30 days (720 hours) from Firestore
-    (async () => {
-      try {
-         const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
-         const oldQuery = query(collection(db, 'production_records'), where('EntryTimestamp', '<', thirtyDaysAgo));
-         const oldDocs = await getDocs(oldQuery);
-         if (!oldDocs.empty) {
-            const batch = writeBatch(db);
-            oldDocs.docs.forEach(d => batch.delete(d.ref));
-            await batch.commit();
-            console.log(`Cleaned up ${oldDocs.docs.length} old records from Firestore.`);
-         }
-      } catch (err) {
-         console.error('Failed to cleanup old records:', err);
-      }
-    })();
-  }));
-
   app.post("/api/utils/normalize-dates", safeHandler(async (req, res) => {
     const db = initializeFirebase();
     const snap = await getDocs(collection(db, 'production_records'));
