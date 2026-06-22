@@ -4,6 +4,36 @@ import { Readable } from 'stream';
 import * as XLSX from 'xlsx';
 import fs from 'fs';
 
+let sheetSyncChain = Promise.resolve();
+
+export async function enqueueSheetSync<T>(fn: () => Promise<T>): Promise<T> {
+  return new Promise((resolve, reject) => {
+    sheetSyncChain = sheetSyncChain.then(async () => {
+      try {
+        let retries = 3;
+        while (retries > 0) {
+          try {
+            const result = await fn();
+            // Wait 1.5s between rows to avoid rate limit
+            await new Promise(r => setTimeout(r, 1500));
+            resolve(result);
+            return;
+          } catch(err: any) {
+             retries--;
+             console.error(`[Google Sheets API] Error occurred, retries left: ${retries}`, err?.message || err);
+             if (retries === 0) reject(err);
+             else await new Promise(r => setTimeout(r, 2000)); // wait 2s before retry
+          }
+        }
+      } catch (err) {
+        reject(err);
+      }
+    }).catch(err => {
+       console.error("[Google Sheets API] Uncaught queue error:", err);
+    });
+  });
+}
+
 // Lazy authentication function
 export function getServiceAccountEmail(): string | null {
   if (process.env.GOOGLE_SERVICE_ACCOUNT_CREDENTIALS) {
@@ -402,14 +432,14 @@ export async function syncToGoogleSheets(entry: any) {
          entry.ProductionMonth || ''
       ];
       
-      await sheets.spreadsheets.values.append({
+      await enqueueSheetSync(() => sheets.spreadsheets.values.append({
          spreadsheetId,
-         range: `${sheetTitle}!A1`,
+         range: `${sheetTitle}!A1:Z`,
          valueInputOption: 'USER_ENTERED',
          requestBody: {
             values: [rowData]
          }
-      });
+      }));
     }
   } catch (err: any) {
     console.error("Error syncing to Google Sheets:", err.message);
@@ -610,24 +640,24 @@ export async function syncMachineLogToGoogleSheets(log: any) {
     ];
 
     if (rowIndex !== -1) {
-       await sheets.spreadsheets.values.update({
+       await enqueueSheetSync(() => sheets.spreadsheets.values.update({
           spreadsheetId,
           range: `Breakdown Logs!A${rowIndex}:I${rowIndex}`,
           valueInputOption: 'USER_ENTERED',
           requestBody: {
              values: [rowData]
           }
-       });
+       }));
        console.log(`[Google Sheets Log Sync] Updated existing log ${logId} at row ${rowIndex}.`);
     } else {
-       await sheets.spreadsheets.values.append({
+       await enqueueSheetSync(() => sheets.spreadsheets.values.append({
           spreadsheetId,
-          range: 'Breakdown Logs!A1',
+          range: 'Breakdown Logs!A:Z',
           valueInputOption: 'USER_ENTERED',
           requestBody: {
              values: [rowData]
           }
-       });
+       }));
        console.log(`[Google Sheets Log Sync] Appended new log ${logId || 'N/A'}.`);
     }
 
@@ -705,14 +735,14 @@ export async function syncMultipleMachineLogsToGoogleSheets(logs: any[]) {
          log.endTime || ''
       ]);
 
-      await sheets.spreadsheets.values.append({
+      await enqueueSheetSync(() => sheets.spreadsheets.values.append({
          spreadsheetId,
-         range: 'Breakdown Logs!A1',
+         range: 'Breakdown Logs!A:Z',
          valueInputOption: 'USER_ENTERED',
          requestBody: {
             values: rowsData
          }
-      });
+      }));
     }
   } catch (err: any) {
     console.error("Error batch syncing machine logs to Google Sheets:", err.message);
@@ -800,14 +830,14 @@ export async function syncDashboardToGoogleSheets(summary: any[]) {
     ]);
 
     // 5. Update values in the sheet
-    await sheets.spreadsheets.values.update({
+    await enqueueSheetSync(() => sheets.spreadsheets.values.update({
        spreadsheetId,
        range: `${sheetTitle}!A1`,
        valueInputOption: 'USER_ENTERED',
        requestBody: {
           values: [headers, ...rowData]
        }
-    });
+    }));
 
     console.log(`[Dashboard Google Sheets Sync] Successfully updated ${summary.length} machine statuses.`);
   } catch (err: any) {
@@ -896,14 +926,14 @@ export async function syncUpdatedEntryToGoogleSheets(entry: any) {
     ];
 
     // 4. Update the exact row range (e.g. A22:Z22)
-    await sheets.spreadsheets.values.update({
+    await enqueueSheetSync(() => sheets.spreadsheets.values.update({
        spreadsheetId,
        range: `${sheetTitle}!A${rowIndex}:Z${rowIndex}`,
        valueInputOption: 'USER_ENTERED',
        requestBody: {
           values: [rowData]
        }
-    });
+    }));
 
     console.log(`[Google Sheets Update Sync] Successfully updated Roll ID ${rollId} at row ${rowIndex} in sheet "${sheetTitle}".`);
   } catch (err: any) {
