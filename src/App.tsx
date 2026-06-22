@@ -815,7 +815,7 @@ export default function App() {
     const filterDate = dashboardDateFilter || getShiftAndDateForDhaka().productionDate;
     if (filterDate && normalizeDateString(record.ProductionDate) !== filterDate) return false;
     if (!recordSearchQuery) return true;
-    const q = recordSearchQuery.toLowerCase();
+    const q = recordSearchQuery.toLowerCase().trim();
     return (
       (record.RollID || "").toLowerCase().includes(q) ||
       (record.OperatorName || "").toLowerCase().includes(q) ||
@@ -827,11 +827,41 @@ export default function App() {
       (record.RollLocation || "").toLowerCase().includes(q) ||
       (record.ProductionType || "").toLowerCase().includes(q)
     );
+  }).sort((a: any, b: any) => {
+    if (!recordSearchQuery) return 0;
+    const q = recordSearchQuery.toLowerCase().trim();
+    // Prioritize if RollID, OperatorName, MachineNo, etc starts with query
+    const aStarts = [
+        a.RollID, a.OperatorName, a.OperatorID, a.MachineNo, a.PINumber?.toString(), a.Material, a.RollLocation, a.ProductionType
+    ].some(val => String(val || "").toLowerCase().startsWith(q));
+    
+    const bStarts = [
+        b.RollID, b.OperatorName, b.OperatorID, b.MachineNo, b.PINumber?.toString(), b.Material, b.RollLocation, b.ProductionType
+    ].some(val => String(val || "").toLowerCase().startsWith(q));
+
+    if (aStarts && !bStarts) return -1;
+    if (!aStarts && bStarts) return 1;
+
+    // Secondary sort: prioritize earlier matches within the searched strings
+    const aMinIndex = Math.min(
+        ...[a.RollID, a.OperatorName, a.OperatorID, a.MachineNo, a.PINumber?.toString(), a.Material, a.RollLocation, a.ProductionType]
+        .map(val => String(val || "").toLowerCase().indexOf(q))
+        .filter(idx => idx !== -1)
+    );
+    const bMinIndex = Math.min(
+        ...[b.RollID, b.OperatorName, b.OperatorID, b.MachineNo, b.PINumber?.toString(), b.Material, b.RollLocation, b.ProductionType]
+        .map(val => String(val || "").toLowerCase().indexOf(q))
+        .filter(idx => idx !== -1)
+    );
+
+    if (aMinIndex >= 0 && bMinIndex >= 0 && aMinIndex !== bMinIndex) return aMinIndex - bMinIndex;
+
+    return 0;
   });
 
   const filteredFeed = recentEntries.filter((entry: any) => {
     if (!feedSearchQuery) return true;
-    const q = feedSearchQuery.toLowerCase();
+    const q = feedSearchQuery.toLowerCase().trim();
     return (
       (entry.RollID || "").toLowerCase().includes(q) ||
       (entry.OperatorID || "").toLowerCase().includes(q) ||
@@ -842,6 +872,35 @@ export default function App() {
       (entry.ProductionType || "").toLowerCase().includes(q) ||
       (entry.Shift || "").toLowerCase().includes(q)
     );
+  }).sort((a: any, b: any) => {
+    if (!feedSearchQuery) return 0;
+    const q = feedSearchQuery.toLowerCase().trim();
+    const aStarts = [
+        a.RollID, a.OperatorName, a.OperatorID, a.MachineNo, a.Material, a.RollLocation, a.ProductionType, a.Shift
+    ].some(val => String(val || "").toLowerCase().startsWith(q));
+    
+    const bStarts = [
+        b.RollID, b.OperatorName, b.OperatorID, b.MachineNo, b.Material, b.RollLocation, b.ProductionType, b.Shift
+    ].some(val => String(val || "").toLowerCase().startsWith(q));
+
+    if (aStarts && !bStarts) return -1;
+    if (!aStarts && bStarts) return 1;
+
+    // Secondary sort: prioritize earlier matches within the searched strings
+    const aMinIndex = Math.min(
+        ...[a.RollID, a.OperatorName, a.OperatorID, a.MachineNo, a.Material, a.RollLocation, a.ProductionType, a.Shift]
+        .map(val => String(val || "").toLowerCase().indexOf(q))
+        .filter(idx => idx !== -1)
+    );
+    const bMinIndex = Math.min(
+        ...[b.RollID, b.OperatorName, b.OperatorID, b.MachineNo, b.Material, b.RollLocation, b.ProductionType, b.Shift]
+        .map(val => String(val || "").toLowerCase().indexOf(q))
+        .filter(idx => idx !== -1)
+    );
+
+    if (aMinIndex >= 0 && bMinIndex >= 0 && aMinIndex !== bMinIndex) return aMinIndex - bMinIndex;
+
+    return 0;
   });
 
   const displayedFeed = feedSearchQuery ? filteredFeed : filteredFeed.slice(0, 7);
@@ -3285,9 +3344,24 @@ function SelectField({ label, name, icon, options = [], placeholder, value, onCh
     setSearchQuery(value || '');
   }, [value]);
 
+  const query = searchQuery.toLowerCase().trim();
   const filteredOptions = Array.from(new Set(options || [])).filter((opt: any) =>
-    opt ? String(opt).toLowerCase().includes(searchQuery.toLowerCase()) : false
-  );
+    opt ? String(opt).toLowerCase().includes(query) : false
+  ).sort((a: any, b: any) => {
+    const aStr = String(a).toLowerCase();
+    const bStr = String(b).toLowerCase();
+    const aStarts = aStr.startsWith(query);
+    const bStarts = bStr.startsWith(query);
+    if (aStarts && !bStarts) return -1;
+    if (!aStarts && bStarts) return 1;
+    
+    // Prioritize earlier matches if it doesn't strictly start with the query
+    const aIndex = aStr.indexOf(query);
+    const bIndex = bStr.indexOf(query);
+    if (aIndex !== bIndex) return aIndex - bIndex;
+    
+    return 0;
+  });
 
   // Reset focused index when query or filtered options change
   useEffect(() => {
