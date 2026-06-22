@@ -997,6 +997,7 @@ const safeHandler = (fn: (req: any, res: any) => Promise<void>) => async (req: a
       message: "Production Entry Saved Successfully", 
       entry: newEntry 
     });
+  }));
 
   app.post("/api/utils/normalize-dates", safeHandler(async (req, res) => {
     const db = initializeFirebase();
@@ -1477,5 +1478,5 @@ const safeHandler = (fn: (req: any, res: any) => Promise<void>) => async (req: a
     }, 7200000); // 2 hours = 7,200,000 ms
   }
 
-export { app };
 export default app;
+

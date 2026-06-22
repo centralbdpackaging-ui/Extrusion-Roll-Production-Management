@@ -2459,8 +2459,6 @@ export default function App() {
                           'EnteredBy', 'ProductionYear', 'ProductionMonth'
                         ];
 
-                        const dateToFilter = dashboardDateFilter || getShiftAndDateForDhaka().productionDate;
-                        const filteredRecords = productionRecords.filter((record: any) => normalizeDateString(record.ProductionDate) === dateToFilter);
                         const formattedData = filteredRecords.map((record: any) => {
                           const row: any = {};
                           headersOrder.forEach(key => {
