@@ -511,6 +511,43 @@ const safeHandler = (fn: (req: any, res: any) => Promise<void>) => async (req: a
     return `${(settings as any).PREFIX}-${lastNo + 1}-${(settings as any).CURRENT_YEAR}`;
   };
 
+  const calculateNextSamplePI = async (yearStr: string) => {
+    const db = initializeFirebase();
+    if (!db) return `SMPL/00001/${yearStr}`;
+    
+    const configRef = doc(db, 'app_config', 'sample_settings');
+    const configDoc = await getDoc(configRef);
+    let nextSerial = 1;
+    
+    if (configDoc.exists()) {
+      nextSerial = (configDoc.data().LAST_SAMPLE_SERIAL || 0) + 1;
+    } else {
+      const q = query(
+        collection(db, 'production_records'),
+        where('ProductionType', '==', 'Sample')
+      );
+      const snapshot = await getDocs(q);
+      let maxSerial = 0;
+      snapshot.forEach(doc => {
+        const d = doc.data();
+        const pi = d.PINumber;
+        if (pi && typeof pi === 'string' && pi.toUpperCase().startsWith('SMPL/')) {
+          const parts = pi.split('/');
+          if (parts.length >= 2) {
+            const serialNum = parseInt(parts[1], 10);
+            if (!isNaN(serialNum) && serialNum > maxSerial) {
+              maxSerial = serialNum;
+            }
+          }
+        }
+      });
+      nextSerial = maxSerial + 1;
+    }
+    
+    const padded = String(nextSerial).padStart(5, '0');
+    return `SMPL/${padded}/${yearStr}`;
+  };
+
   app.get("/api/operators", safeHandler(async (req, res) => {
     const operatorMaster = await getOperators();
     res.json(operatorMaster);
@@ -883,6 +920,11 @@ const safeHandler = (fn: (req: any, res: any) => Promise<void>) => async (req: a
     res.json({ nextId: await calculateNextRollId() });
   }));
 
+  app.get("/api/next-sample-pi", safeHandler(async (req, res) => {
+    const year = req.query.year ? String(req.query.year) : new Date().getFullYear().toString();
+    res.json({ nextPI: await calculateNextSamplePI(year) });
+  }));
+
   app.get("/api/previous-roll-id", safeHandler(async (req, res) => {
     const settings = await getRollSettings();
     let lastNo = (settings as any).LAST_ROLL_NO || 0;
@@ -920,29 +962,30 @@ const safeHandler = (fn: (req: any, res: any) => Promise<void>) => async (req: a
     res.json({ message: `Sent ${records.length} records to Google Sheets syncing mechanism.` });
   }));
 
-  const formatPINumber = (pi: any, year: any): string => {
+  const formatPINumber = (pi: any, year: any, isSample: boolean = false): string => {
     if (!pi) return '';
     const piStr = String(pi).trim();
+    const prefix = isSample ? 'SMPL' : 'MPBL';
     const yearStr = String(year || new Date().getFullYear()).trim();
 
-    // Match patterns like 'MPBL/03500/2026' or 'mpbl/123/2022'
-    const regex = /^mpbl\/(\d+)\/(\d{4})$/i;
+    // Match patterns like 'MPBL/03500/2026' or 'SMPL/00021/2026' or 'mpbl/123/2022'
+    const regex = /^(mpbl|smpl)\/(\d+)\/(\d{4})$/i;
     const match = piStr.match(regex);
     if (match) {
-      const rawDigits = match[1];
-      const matchYear = match[2];
-      return `MPBL/${rawDigits.padStart(5, '0')}/${matchYear}`;
+      const rawDigits = match[2];
+      const matchYear = match[3];
+      return `${prefix}/${rawDigits.padStart(5, '0')}/${matchYear}`;
     }
 
     // Match if it's just raw digits (e.g. 3500)
     if (/^\d+$/.test(piStr)) {
-      return `MPBL/${piStr.padStart(5, '0')}/${yearStr}`;
+      return `${prefix}/${piStr.padStart(5, '0')}/${yearStr}`;
     }
 
     // Otherwise, clean characters and try to extract digits
     const onlyDigits = piStr.replace(/\D/g, '');
     if (onlyDigits) {
-      return `MPBL/${onlyDigits.padStart(5, '0')}/${yearStr}`;
+      return `${prefix}/${onlyDigits.padStart(5, '0')}/${yearStr}`;
     }
 
     return piStr.toUpperCase();
@@ -963,7 +1006,20 @@ const safeHandler = (fn: (req: any, res: any) => Promise<void>) => async (req: a
     }
     
     const date = new Date(entry.ProductionDate || new Date());
-    const formattedPI = formatPINumber(entry.PINumber, entry.Year || date.getFullYear().toString());
+    
+    const isSample = entry.ProductionType === 'Sample';
+    const formattedPI = formatPINumber(entry.PINumber, entry.Year || date.getFullYear().toString(), isSample);
+    
+    if (isSample) {
+      const smplParts = formattedPI.split('/');
+      if (smplParts.length >= 2) {
+        const serialVal = parseInt(smplParts[1], 10);
+        if (!isNaN(serialVal)) {
+          await setDoc(doc(db, 'app_config', 'sample_settings'), { LAST_SAMPLE_SERIAL: serialVal }, { merge: true });
+        }
+      }
+    }
+
     const piDetails = await getPendingOrderDetailsByPi(formattedPI);
 
     const newEntry = {
@@ -1139,21 +1195,29 @@ const safeHandler = (fn: (req: any, res: any) => Promise<void>) => async (req: a
 
     // Filter updates
     const cleanedUpdates: any = { ...updates };
-    if (updates.PINumber) {
-      const yearToUse = updates.Year || originalData.Year || new Date().getFullYear().toString();
-      cleanedUpdates.PINumber = formatPINumber(updates.PINumber, yearToUse);
-      
-      const piDetails = await getPendingOrderDetailsByPi(cleanedUpdates.PINumber);
-      cleanedUpdates.Retailer = piDetails.retailer || '';
-      cleanedUpdates.Customer = piDetails.customer || '';
-    } else if (updates.Year) {
-      const piToUse = originalData.PINumber;
-      const formatted = formatPINumber(piToUse, updates.Year);
+    const checkType = updates.ProductionType || originalData.ProductionType;
+    const isSample = checkType === 'Sample';
+    
+    let piToUse = updates.PINumber || originalData.PINumber || '';
+    const yearToUse = updates.Year || originalData.Year || new Date().getFullYear().toString();
+    
+    if (updates.PINumber || updates.Year || updates.ProductionType) {
+      const formatted = formatPINumber(piToUse, yearToUse, isSample);
       cleanedUpdates.PINumber = formatted;
       
       const piDetails = await getPendingOrderDetailsByPi(formatted);
       cleanedUpdates.Retailer = piDetails.retailer || '';
       cleanedUpdates.Customer = piDetails.customer || '';
+      
+      if (isSample) {
+        const smplParts = formatted.split('/');
+        if (smplParts.length >= 2) {
+          const serialVal = parseInt(smplParts[1], 10);
+          if (!isNaN(serialVal)) {
+            await setDoc(doc(db, 'app_config', 'sample_settings'), { LAST_SAMPLE_SERIAL: serialVal }, { merge: true });
+          }
+        }
+      }
     }
     if (updates.ProductionDate) {
       const date = new Date(updates.ProductionDate);

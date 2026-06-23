@@ -681,6 +681,12 @@ export default function App() {
       let finalPINumber = formData.PINumber;
       if (!finalPINumber.includes('/')) {
         finalPINumber = `${productionTypePrefix}/${formData.PINumber}/${formData.Year}`;
+      } else {
+        if (formData.ProductionType === 'Sample') {
+          finalPINumber = finalPINumber.replace(/^MPBL\//i, 'SMPL/');
+        } else {
+          finalPINumber = finalPINumber.replace(/^SMPL\//i, 'MPBL/');
+        }
       }
 
       const res = await fetch('/api/production', {
@@ -734,6 +740,14 @@ export default function App() {
   const handleUpdateEntry = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingEntry || !editingEntry.RollID) return;
+    
+    let updatedPI = editingEntry.PINumber || "";
+    if (editingEntry.ProductionType === 'Sample') {
+      updatedPI = updatedPI.replace(/^MPBL\//i, 'SMPL/');
+    } else {
+      updatedPI = updatedPI.replace(/^SMPL\//i, 'MPBL/');
+    }
+
     setIsSavingEdit(true);
     try {
       const res = await fetch('/api/production/update', {
@@ -741,7 +755,7 @@ export default function App() {
         headers: {
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify(editingEntry)
+        body: JSON.stringify({ ...editingEntry, PINumber: updatedPI })
       });
       const data = await res.json();
       if (res.ok) {
