@@ -39,7 +39,8 @@ import {
   FileUp,
   FolderOpen,
   UploadCloud,
-  Trash2
+  Trash2,
+  Copy
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn, formatDate, getShiftAndDateForDhaka, normalizeDateString } from './lib/utils';
@@ -158,9 +159,10 @@ const formatMachineDuration = (hoursNum: number): string => {
 };
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'entry' | 'dashboard' | 'history' | 'machines' | 'master-config' | 'operators' | 'master-production-record' | 'breakdown-data' | 'reports'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'entry' | 'dashboard' | 'history' | 'machines' | 'master-config' | 'operators' | 'master-production-record' | 'sample-production' | 'breakdown-data' | 'reports'>('dashboard');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [dashboardDateFilter, setDashboardDateFilter] = useState<string>('');
+  const [sampleFilterMode, setSampleFilterMode] = useState<'last10' | 'selected' | 'all'>('last10');
   
   // Calculate Bangladesh shift and operational production date
   const initialShiftInfo = getShiftAndDateForDhaka();
@@ -238,6 +240,112 @@ export default function App() {
       console.error("Error fetching pending order info:", err);
     }
   };
+
+  const [spreadsheetId, setSpreadsheetId] = useState('');
+  const [serviceAccountEmail, setServiceAccountEmail] = useState('');
+  const [isSavingSheetConfig, setIsSavingSheetConfig] = useState(false);
+  const [isTestingSheetConfig, setIsTestingSheetConfig] = useState(false);
+  const [isSyncingAllSheets, setIsSyncingAllSheets] = useState(false);
+  const [testResult, setTestResult] = useState<{ success: boolean; title?: string; tabs?: string[]; message?: string; error?: string } | null>(null);
+
+  const fetchGoogleSheetSettings = async () => {
+    try {
+      const emailRes = await fetch('/api/settings/google-service-account');
+      if (emailRes.ok) {
+        const emailData = await emailRes.json();
+        setServiceAccountEmail(emailData.email || '');
+      }
+      
+      const configRes = await fetch('/api/settings/google-sheet-config');
+      if (configRes.ok) {
+        const configData = await configRes.json();
+        setSpreadsheetId(configData.spreadsheetId || '');
+      }
+    } catch (err) {
+      console.error("Error fetching google sheet settings", err);
+    }
+  };
+
+  const saveGoogleSheetSettings = async () => {
+    setIsSavingSheetConfig(true);
+    try {
+      const res = await fetch('/api/settings/google-sheet-config', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ spreadsheetId })
+      });
+      if (res.ok) {
+        showToast("Google Sheet ID updated successfully / গুগল শীট আইডি সফলভাবে আপডেট হয়েছে", "success");
+      } else {
+        showToast("Failed to update Google Sheet ID", "error");
+      }
+    } catch (err) {
+      showToast("Network error", "error");
+    } finally {
+      setIsSavingSheetConfig(false);
+    }
+  };
+
+  const testGoogleSheetSettings = async () => {
+    setIsTestingSheetConfig(true);
+    setTestResult(null);
+    try {
+      const res = await fetch('/api/settings/test-google-sheets', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setTestResult({
+          success: true,
+          title: data.title,
+          tabs: data.tabs,
+          message: data.message
+        });
+        showToast("Connected to Google Sheets successfully! / গুগল শীটের সাথে সফলভাবে সংযোগ হয়েছে!", "success");
+      } else {
+        setTestResult({
+          success: false,
+          error: data.error || "Failed to connect to Google Sheets."
+        });
+        showToast("Connection failed! Check guidelines below / সংযোগ ব্যর্থ হয়েছে!", "error");
+      }
+    } catch (err: any) {
+      setTestResult({
+        success: false,
+        error: "Network error or server timeout. Please double-check spreadsheet permission and ID."
+      });
+      showToast("Network error during test", "error");
+    } finally {
+      setIsTestingSheetConfig(false);
+    }
+  };
+
+  const syncAllSheets = async () => {
+    setIsSyncingAllSheets(true);
+    try {
+      const res = await fetch('/api/sync-all-sheets', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      });
+      const data = await res.json();
+      if (res.ok) {
+        showToast("Full database resynced to Google Sheets successfully! / গুগল শীটে সম্পূর্ণ ডাটা পুনরায় সফলভাবে সিঙ্ক করা হয়েছে!", "success");
+      } else {
+        showToast(data.message || "Failed to sync sheets", "error");
+      }
+    } catch (err: any) {
+      showToast("Network error during sync", "error");
+    } finally {
+      setIsSyncingAllSheets(false);
+    }
+  };
   const [tick, setTick] = useState(0);
 
   useEffect(() => {
@@ -257,11 +365,14 @@ export default function App() {
     if (activeTab === 'breakdown-data' || activeTab === 'machines') {
       fetchMachines();
     }
-    if (activeTab === 'master-production-record' || activeTab === 'reports') {
+    if (activeTab === 'master-production-record' || activeTab === 'sample-production' || activeTab === 'reports') {
       fetchProductionRecords();
     }
     if (activeTab === 'pending-order') {
       fetchPendingOrderInfo();
+    }
+    if (activeTab === 'master-config') {
+      fetchGoogleSheetSettings();
     }
   }, [activeTab]);
 
@@ -700,7 +811,7 @@ export default function App() {
         
         fetchDashboard();
         fetchRecentEntries();
-        if (activeTab === 'master-production-record' || activeTab === 'reports') {
+        if (activeTab === 'master-production-record' || activeTab === 'sample-production' || activeTab === 'reports') {
           fetchProductionRecords();
         }
         fetchNextRollId();
@@ -765,7 +876,7 @@ export default function App() {
           fetchDashboard(),
           fetchRecentEntries()
         ]);
-        if (activeTab === 'master-production-record' || activeTab === 'reports') {
+        if (activeTab === 'master-production-record' || activeTab === 'sample-production' || activeTab === 'reports') {
           fetchProductionRecords();
         }
       } else {
@@ -872,6 +983,51 @@ export default function App() {
 
     return 0;
   });
+
+  const filteredSampleRecords = React.useMemo(() => {
+    return productionRecords.filter((record: any) => {
+      if (record.ProductionType !== 'Sample') return false;
+
+      const recordDateStr = normalizeDateString(record.ProductionDate);
+      const baseDateStr = dashboardDateFilter || getShiftAndDateForDhaka().productionDate;
+
+      if (sampleFilterMode === 'selected') {
+        if (recordDateStr !== baseDateStr) return false;
+      } else if (sampleFilterMode === 'last10') {
+        const recordTime = new Date(recordDateStr).getTime();
+        const baseTime = new Date(baseDateStr).getTime();
+        if (!isNaN(recordTime) && !isNaN(baseTime)) {
+          const diffTime = baseTime - recordTime;
+          const diffDays = diffTime / (1000 * 60 * 60 * 24);
+          if (diffDays < -1 || diffDays > 9) return false;
+        } else {
+          return false;
+        }
+      }
+
+      if (!recordSearchQuery) return true;
+      const q = recordSearchQuery.toLowerCase().trim();
+      return (
+        (record.RollID || "").toLowerCase().includes(q) ||
+        (record.OperatorName || "").toLowerCase().includes(q) ||
+        (record.OperatorID || "").toLowerCase().includes(q) ||
+        (record.MachineNo || "").toLowerCase().includes(q) ||
+        (record.PINumber || "").toString().toLowerCase().includes(q) ||
+        (record.Material || "").toLowerCase().includes(q) ||
+        (record.ProductionDate || "").toLowerCase().includes(q) ||
+        (record.RollLocation || "").toLowerCase().includes(q)
+      );
+    }).sort((a: any, b: any) => {
+      const dateA = new Date(normalizeDateString(a.ProductionDate)).getTime();
+      const dateB = new Date(normalizeDateString(b.ProductionDate)).getTime();
+      if (dateA !== dateB) {
+        return (isNaN(dateB) ? 0 : dateB) - (isNaN(dateA) ? 0 : dateA);
+      }
+      const timeA = new Date(a.EntryTimestamp || 0).getTime();
+      const timeB = new Date(b.EntryTimestamp || 0).getTime();
+      return (isNaN(timeB) ? 0 : timeB) - (isNaN(timeA) ? 0 : timeA);
+    });
+  }, [productionRecords, sampleFilterMode, dashboardDateFilter, recordSearchQuery]);
 
   const filteredFeed = recentEntries.filter((entry: any) => {
     if (!feedSearchQuery) return true;
@@ -1091,6 +1247,13 @@ export default function App() {
               isOpen={isSidebarOpen}
             />
             <SidebarLink 
+              icon={<Database size={18} />} 
+              label="SAMPLE PRODUCTION" 
+              active={activeTab === 'sample-production'}
+              onClick={() => setActiveTab('sample-production')}
+              isOpen={isSidebarOpen}
+            />
+            <SidebarLink 
               icon={<Users size={18} />} 
               label="OPERATORS" 
               active={activeTab === 'operators'}
@@ -1127,7 +1290,9 @@ export default function App() {
                activeTab === 'master-config' ? 'Master Data Table' : 
                activeTab === 'operators' ? 'Operator Management' : 
                activeTab === 'breakdown-data' ? 'Breakdown Data' : 
-               activeTab === 'pending-order' ? 'Pending Order' : 'System Setup'}
+               activeTab === 'pending-order' ? 'Pending Order' : 
+               activeTab === 'master-production-record' ? 'Production Record' : 
+               activeTab === 'sample-production' ? 'Sample Production' : 'System Setup'}
             </h2>
             <div className="flex items-center gap-2 px-2 py-0.5 rounded bg-emerald-50 border border-emerald-100">
                <Database size={10} className="text-emerald-500" />
@@ -2149,6 +2314,197 @@ export default function App() {
                     </table>
                   </div>
                 </div>
+
+                {/* Google Sheets Integration Section */}
+                <div className="space-y-6 pt-6">
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 rounded-lg bg-brand-primary/10 flex items-center justify-center text-brand-primary">
+                      <FileSpreadsheet size={18} />
+                    </div>
+                    <h3 className="text-lg font-display font-bold text-slate-900 uppercase tracking-tight">
+                      Google Sheets Integration / গুগল শীট ইন্টিগ্রেশন
+                    </h3>
+                  </div>
+
+                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+                    {/* Settings Form */}
+                    <div className="lg:col-span-5 glass-panel p-6 border-slate-200 shadow-xl shadow-slate-200/20 space-y-6">
+                      <div className="flex items-center gap-2 border-b border-slate-100 pb-3">
+                        <Settings size={16} className="text-brand-primary" />
+                        <h4 className="text-[11px] font-black text-slate-700 uppercase tracking-widest">Configuration</h4>
+                      </div>
+
+                      <div className="space-y-4">
+                        {/* Service Account Email Copy Field */}
+                        <div className="space-y-1.5">
+                          <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest ml-1">
+                            1. Google Service Account Email (কপি করে শীট-এ শেয়ার করুন)
+                          </label>
+                          <div className="relative flex items-center">
+                            <input 
+                              type="text" 
+                              readOnly
+                              value={serviceAccountEmail || "Loading Service Account Email..."}
+                              className="w-full bg-slate-100 border border-slate-200 rounded-xl pl-4 pr-12 py-3 text-xs font-mono font-bold text-slate-600 focus:outline-none"
+                            />
+                            {serviceAccountEmail && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  navigator.clipboard.writeText(serviceAccountEmail);
+                                  showToast("Email copied / ইমেইল কপি করা হয়েছে", "success");
+                                }}
+                                className="absolute right-3 p-1.5 bg-white border border-slate-200 rounded-lg text-slate-500 hover:text-brand-primary hover:border-brand-primary/30 active:scale-95 transition-all shadow-sm flex items-center justify-center"
+                                title="Copy Email"
+                              >
+                                <Copy size={14} />
+                              </button>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Spreadsheet ID Input Field */}
+                        <div className="space-y-1.5">
+                          <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest ml-1">
+                            2. Google Spreadsheet ID (স্প্রেডশীট আইডি)
+                          </label>
+                          <input 
+                            type="text" 
+                            placeholder="e.g. 1aBcDeFgHiJkLmNoPqRsTuVwXyZ"
+                            value={spreadsheetId}
+                            onChange={(e) => setSpreadsheetId(e.target.value.trim())}
+                            className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-xs font-mono font-bold text-slate-900 focus:outline-none focus:ring-4 focus:ring-brand-primary/5 focus:border-brand-primary transition-all placeholder:font-sans placeholder:text-slate-400"
+                          />
+                          <p className="text-[9px] text-slate-400 italic font-medium leading-normal px-1">
+                            Find this ID in your Google Sheet's URL between '/d/' and '/edit'.
+                          </p>
+                        </div>
+
+                        <button 
+                          onClick={saveGoogleSheetSettings}
+                          disabled={isSavingSheetConfig || !spreadsheetId}
+                          className="w-full py-3 bg-brand-primary text-white rounded-xl text-[11px] font-black uppercase tracking-[0.2em] shadow-lg shadow-brand-primary/20 hover:brightness-110 active:scale-[0.98] transition-all flex items-center justify-center gap-2 group disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          {isSavingSheetConfig ? (
+                            <RefreshCw size={14} className="animate-spin" />
+                          ) : (
+                            <CheckCircle2 size={14} />
+                          )}
+                          Save Sheet ID / আইডি সেভ করুন
+                        </button>
+
+                        <button 
+                          onClick={testGoogleSheetSettings}
+                          disabled={isTestingSheetConfig || !spreadsheetId}
+                          className="w-full py-3 bg-slate-900 text-white rounded-xl text-[11px] font-black uppercase tracking-[0.2em] shadow-lg shadow-slate-900/10 hover:bg-slate-800 active:scale-[0.98] transition-all flex items-center justify-center gap-2 group disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          {isTestingSheetConfig ? (
+                            <RefreshCw size={14} className="animate-spin" />
+                          ) : (
+                            <RefreshCw size={14} />
+                          )}
+                          Test Connection & Sync / টেস্ট করুন
+                        </button>
+
+                        <button 
+                          onClick={syncAllSheets}
+                          disabled={isSyncingAllSheets || !spreadsheetId}
+                          className="w-full py-3 bg-emerald-600 text-white rounded-xl text-[11px] font-black uppercase tracking-[0.2em] shadow-lg shadow-emerald-600/20 hover:bg-emerald-700 active:scale-[0.98] transition-all flex items-center justify-center gap-2 group disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          {isSyncingAllSheets ? (
+                            <RefreshCw size={14} className="animate-spin" />
+                          ) : (
+                            <RefreshCw size={14} />
+                          )}
+                          Sync All Production Data / সম্পূর্ণ ডাটা সিঙ্ক করুন
+                        </button>
+
+                        {testResult && (
+                          <div className={cn(
+                            "p-4 rounded-xl border text-xs space-y-2 animate-fadeIn",
+                            testResult.success 
+                              ? "bg-emerald-50 border-emerald-200 text-emerald-800" 
+                              : "bg-rose-50 border-rose-200 text-rose-800"
+                          )}>
+                            <div className="flex items-center gap-2 font-bold">
+                              {testResult.success ? (
+                                <CheckCircle2 size={16} className="text-emerald-600" />
+                              ) : (
+                                <AlertTriangle size={16} className="text-rose-600" />
+                              )}
+                              <span>
+                                {testResult.success ? "Connection Successful / সফল হয়েছে!" : "Connection Failed / ব্যর্থ হয়েছে!"}
+                              </span>
+                            </div>
+                            <p className="font-medium leading-relaxed break-words whitespace-pre-line">
+                              {testResult.success ? testResult.message : testResult.error}
+                            </p>
+                            {testResult.success && testResult.title && (
+                              <div className="pt-2 border-t border-emerald-200/50 space-y-1">
+                                <p className="text-[10px] uppercase font-black tracking-wider text-emerald-700">Sheet Metadata:</p>
+                                <p className="font-mono text-[11px]"><b>Title:</b> {testResult.title}</p>
+                                {testResult.tabs && testResult.tabs.length > 0 && (
+                                  <p className="font-mono text-[11px] break-words">
+                                    <b>Tabs Found:</b> {testResult.tabs.join(", ")}
+                                  </p>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Step by Step Instructions */}
+                    <div className="lg:col-span-7 glass-panel p-6 border-slate-200 space-y-6">
+                      <div className="border-b border-slate-100 pb-3">
+                        <h4 className="text-[11px] font-black text-slate-700 uppercase tracking-widest">
+                          Setup Guidelines / সেটআপ গাইডলাইন
+                        </h4>
+                      </div>
+
+                      <div className="space-y-5 text-xs leading-relaxed text-slate-600">
+                        {/* Bengali Instructions */}
+                        <div className="space-y-2 bg-emerald-50/50 border border-emerald-100/50 p-4 rounded-xl">
+                          <h5 className="font-bold text-emerald-800 flex items-center gap-1.5 uppercase tracking-wide text-[10px]">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" /> বাংলা গাইডলাইন (Bengali)
+                          </h5>
+                          <ol className="list-decimal pl-4 space-y-1.5 text-[11px] font-medium text-slate-700">
+                            <li>প্রথমে আপনার গুগল ড্রাইভ থেকে একটি নতুন গুগল স্প্রেডশীট (Google Sheet) তৈরি করুন অথবা বিদ্যমান একটি খুলুন।</li>
+                            <li>স্প্রেডশীটটির ডানদিকের উপরে <b>Share (শেয়ার)</b> বাটনে ক্লিক করুন।</li>
+                            <li>আমাদের এই অটোমেশন ইমেইলটি <code className="bg-white px-1.5 py-0.5 border border-slate-200 rounded font-mono select-all break-all">{serviceAccountEmail || "[Service Account Email]"}</code> কপি করে সেখানে <b>Editor (সম্পাদক)</b> হিসেবে যুক্ত (Share) করে দিন।</li>
+                            <li>আপনার গুগল শীট-এর ব্রাউজার URL থেকে স্প্রেডশীট আইডিটি কপি করুন। উদাহরণ: <code className="bg-white px-1.5 py-0.5 border border-slate-200 rounded font-mono break-all text-slate-500">https://docs.google.com/spreadsheets/d/<span className="text-brand-primary font-bold">1aBcDeFgHiJkLmNoPqRsTuVwXyZ</span>/edit</code></li>
+                            <li>আইডিটি বাম পাশের ইনপুট বক্সে পেস্ট করে <b>Save Sheet ID</b> বাটনে ক্লিক করুন।</li>
+                          </ol>
+                        </div>
+
+                        {/* English Instructions */}
+                        <div className="space-y-2 bg-slate-50 border border-slate-200/50 p-4 rounded-xl">
+                          <h5 className="font-bold text-slate-800 flex items-center gap-1.5 uppercase tracking-wide text-[10px]">
+                            <span className="w-1.5 h-1.5 rounded-full bg-slate-400" /> English Guidelines
+                          </h5>
+                          <ol className="list-decimal pl-4 space-y-1.5 text-[11px] text-slate-600">
+                            <li>Create a new Google Sheet or open your existing sheet in Google Drive.</li>
+                            <li>Click the <b>Share</b> button in the top-right corner of your Google Sheet.</li>
+                            <li>Add the Service Account Email: <code className="bg-white px-1.5 py-0.5 border border-slate-200 rounded font-mono select-all break-all">{serviceAccountEmail || "Fetching..."}</code> as an <b>Editor</b>.</li>
+                            <li>Copy the Spreadsheet ID from the browser URL (the long string of characters between <code>/d/</code> and <code>/edit</code>).</li>
+                            <li>Paste the ID into the <b>Google Spreadsheet ID</b> input box on the left and click <b>Save Sheet ID</b>.</li>
+                          </ol>
+                        </div>
+
+                        <div className="bg-amber-50 border border-amber-100/70 p-4 rounded-xl space-y-2 text-[11px]">
+                          <p className="font-bold text-amber-800 uppercase tracking-wider text-[9px] flex items-center gap-1.5">
+                            <AlertTriangle size={12} /> Important Notes / গুরুত্বপূর্ণ নোটিশ:
+                          </p>
+                          <ul className="list-disc pl-4 space-y-1 text-amber-700 font-medium">
+                            <li>অবশ্যই গুগল শীটটি উপরে দেওয়া সার্ভিস অ্যাকাউন্ট ইমেইলের সাথে শেয়ার করতে হবে, অন্যথায় অ্যাপটি শীটে ডাটা লিখতে পারবে না (Permission Error)।</li>
+                            <li>শীটের মধ্যে ডাটা পাঠালে অ্যাপটি স্বয়ংক্রিয়ভাবে প্রয়োজনীয় ট্যাব (যেমন: <code>Machine Status</code>, <code>Breakdown Logs</code>, <code>Production Records (Lifetime)</code>, এবং <code>Pending Orders</code>) তৈরি করে নেবে।</li>
+                          </ul>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
               </motion.div>
             )}
 
@@ -2656,6 +3012,324 @@ export default function App() {
                                 Edit
                               </button>
                             </td>
+                            <td className="px-4 py-3 text-[10px] font-mono text-slate-500">{record.EntryTimestamp}</td>
+                            <td className="px-4 py-3"><span className="font-mono text-[11px] font-black text-brand-primary">{record.RollID}</span></td>
+                            <td className="px-4 py-3 text-[11px] font-bold text-slate-700">{record.ProductionDate}</td>
+                            <td className="px-4 py-3 text-[11px] font-medium text-slate-900">{record.Shift}</td>
+                            <td className="px-4 py-3 text-[11px] font-medium text-slate-900">{record.ProductionType}</td>
+                            <td className="px-4 py-3 text-[11px] font-medium text-slate-900">{record.OperatorID}</td>
+                            <td className="px-4 py-3 text-[11px] font-bold text-slate-900">{record.OperatorName}</td>
+                            <td className="px-4 py-3 text-[11px] font-bold text-slate-900">{record.MachineNo}</td>
+                            <td className="px-4 py-3 text-[11px] font-medium text-slate-900">{record.Year}</td>
+                            <td className="px-4 py-3 text-[11px] font-medium text-slate-900">{record.PINumber || 'N/A'}</td>
+                            <td className="px-4 py-3 text-[11px] font-medium text-slate-900">{record.TubeSize} mm</td>
+                            <td className="px-4 py-3 text-[11px] font-medium text-slate-900">{record.UOM}</td>
+                            <td className="px-4 py-3 text-[11px] font-medium text-slate-900">{record.Material}</td>
+                            <td className="px-4 py-3 text-[11px] font-medium text-slate-900">{record.Micron}</td>
+                            <td className="px-4 py-3 text-[11px] font-medium text-slate-900">{record.InLinePrint}</td>
+                            <td className="px-4 py-3 text-[11px] font-bold text-slate-900">{record.FinishedMeter} M</td>
+                            <td className="px-4 py-3 text-[11px] font-bold text-brand-primary">{record.FinishedKgs} KG</td>
+                            <td className="px-4 py-3 text-[11px] font-medium text-rose-500 font-bold">{record.ScrapKgs} KG</td>
+                            <td className="px-4 py-3 text-[11px] font-medium text-slate-900">{record.RollLocation}</td>
+                            <td className="px-4 py-3 text-[11px] font-bold text-slate-800 bg-slate-50/40">{record.Retailer || 'N/A'}</td>
+                            <td className="px-4 py-3 text-[11px] font-bold text-slate-800 bg-slate-50/40">{record.Customer || 'N/A'}</td>
+                            <td className="px-4 py-3 text-[10px] font-mono font-medium text-slate-400">{record.DataUpdateTime}</td>
+                            <td className="px-4 py-3 text-[10px] font-mono text-slate-400">{record.Fingerprint}</td>
+                            <td className="px-4 py-3 text-[11px] font-medium text-slate-500">{record.EnteredBy}</td>
+                            <td className="px-4 py-3 text-[11px] font-medium text-slate-600">{record.ProductionYear}</td>
+                            <td className="px-4 py-3 text-[11px] font-medium text-slate-600">{record.ProductionMonth}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </motion.div>
+            )}
+
+            {activeTab === 'sample-production' && (
+              <motion.div 
+                key="sample-records"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                className="space-y-6"
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-brand-primary/10 flex items-center justify-center text-brand-primary">
+                      <Database size={22} />
+                    </div>
+                    <div>
+                      <h3 className="text-xl font-display font-black text-slate-900 uppercase">Sample Production</h3>
+                      <p className="text-sm text-slate-500 font-medium tracking-tight">Full historical database of all sample manufacturing cycles</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <input 
+                      type="file" 
+                      accept=".xlsx, .xls, .csv" 
+                      id="excel-upload-sample" 
+                      className="hidden" 
+                      onChange={async (e) => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        try {
+                          const reader = new FileReader();
+                          reader.onload = async (event) => {
+                            const data = new Uint8Array(event.target?.result as ArrayBuffer);
+                            const XLSX = await import('xlsx');
+                            const workbook = XLSX.read(data, { type: 'array' });
+                            const firstSheet = workbook.SheetNames[0];
+                            const worksheet = workbook.Sheets[firstSheet];
+                            const jsonData = XLSX.utils.sheet_to_json(worksheet, { raw: false });
+                            
+                            if (jsonData.length === 0) {
+                              showToast("No data found in file", "error");
+                              return;
+                            }
+                            
+                            const mappedData = jsonData.map((row: any) => ({
+                              ProductionDate: row['Production Date'] || row['ProductionDate'] || '',
+                              Shift: row['Shift'] || '',
+                              ProductionType: 'Sample',
+                              OperatorID: row['Operator ID'] || row['OperatorID'] || '',
+                              MachineNo: row['Machine no'] || row['MachineNo'] || '',
+                              Year: row['Year'] || '',
+                              PINumber: row['PI NUMBER'] || row['PINumber'] || row['PI Number'] || '',
+                              TubeSize: row['Tube Size'] || row['TubeSize'] || '',
+                              UOM: row['UOM'] || '',
+                              Material: row['Material'] || '',
+                              Micron: row['Micron'] || '',
+                              InLinePrint: row['InLine Print'] || row['InLinePrint'] || '',
+                              FinishedMeter: row['Finished Meter'] || row['FinishedMeter'] || '0',
+                              FinishedKgs: row['Finished Kgs'] || row['FinishedKgs'] || '0',
+                              RollLocation: row['Roll Location'] || row['RollLocation'] || '',
+                              RollID: row['Roll ID'] || row['RollID'] || '',
+                              DataUpdateTime: row['Data Update Time'] || row['DataUpdateTime'] || new Date().toLocaleString(),
+                              Fingerprint: row['Fingerprint'] || Math.random().toString(36).substring(2, 10).toUpperCase(),
+                              EnteredBy: row['Entered By'] || row['EnteredBy'] || 'Imported Data',
+                              OperatorName: row['Operator Name'] || row['Opeator Name'] || row['OperatorName'] || '',
+                              ScrapKgs: row['Scrap Kgs'] || row['ScrapKgs'] || '0',
+                              ProductionYear: row['Production Year'] || row['ProductionYear'] || '',
+                              ProductionMonth: row['Production Month'] || row['ProductionMonth'] || '',
+                              MachineStatus: row['MachineStatus'] || 'Running'
+                            }));
+
+                            const existingRollIds = new Set(productionRecords.map(r => r.RollID).filter(Boolean));
+                            const newRecordsToUpload = mappedData.filter(d => 
+                              !d.RollID || !existingRollIds.has(String(d.RollID).trim())
+                            );
+
+                            if (newRecordsToUpload.length === 0) {
+                              showToast("No new records to upload. All data already exists in the system.", "success");
+                              e.target.value = '';
+                              return;
+                            }
+
+                            try {
+                              showToast(`Found ${newRecordsToUpload.length} new records to upload...`, "success");
+                              const chunkSize = 500;
+                              let uploadedCount = 0;
+                              
+                              for (let i = 0; i < newRecordsToUpload.length; i += chunkSize) {
+                                const chunk = newRecordsToUpload.slice(i, i + chunkSize);
+                                const res = await fetch('/api/production/bulk', {
+                                  method: 'POST',
+                                  headers: { 'Content-Type': 'application/json' },
+                                  body: JSON.stringify(chunk)
+                                });
+                                if (!res.ok) throw new Error("Failed to import data chunk");
+                                
+                                uploadedCount += chunk.length;
+                                showToast(`Progress: ${uploadedCount} / ${newRecordsToUpload.length} records...`, "success");
+                              }
+
+                              showToast(`All ${newRecordsToUpload.length} new sample records imported successfully!`, 'success');
+                              await fetchProductionRecords();
+                              e.target.value = '';
+                            } catch (err) {
+                              console.error(err);
+                              showToast("Failed to upload to server", 'error');
+                            }
+                          };
+                          reader.readAsArrayBuffer(file);
+                        } catch (err) {
+                          console.error('Error reading excel file:', err);
+                          showToast("Failed to read file", 'error');
+                        }
+                      }}
+                    />
+                    <label 
+                      htmlFor="excel-upload-sample"
+                      className="cursor-pointer px-4 py-2 bg-white border border-brand-primary/20 rounded-xl text-[10px] font-black uppercase tracking-widest text-brand-primary hover:bg-brand-primary hover:text-white transition-all flex items-center gap-2"
+                    >
+                      <Database size={14} />
+                      Import Excel
+                    </label>
+                    <button 
+                      onClick={() => {
+                        const headersOrder = [
+                          'EntryTimestamp', 'RollID', 'ProductionDate', 'Shift', 'ProductionType', 
+                          'OperatorID', 'OperatorName', 'MachineNo', 'Year', 'PINumber', 
+                          'TubeSize', 'UOM', 'Material', 'Micron', 'InLinePrint', 
+                          'FinishedMeter', 'FinishedKgs', 'ScrapKgs', 'RollLocation', 
+                          'Retailer', 'Customer', 'DataUpdateTime', 'Fingerprint', 
+                          'EnteredBy', 'ProductionYear', 'ProductionMonth'
+                        ];
+
+                        const formattedData = filteredSampleRecords.map((record: any) => {
+                          const row: any = {};
+                          headersOrder.forEach(key => {
+                            row[key] = record[key] || '';
+                          });
+                          return row;
+                        });
+
+                        const ws = XLSX.utils.json_to_sheet(formattedData, { header: headersOrder });
+                        const wb = XLSX.utils.book_new();
+                        XLSX.utils.book_append_sheet(wb, ws, "SampleProductionRecords");
+                        XLSX.writeFile(wb, "SampleProductionRecords.xlsx");
+                      }}
+                      className="px-4 py-2 bg-white border border-slate-200 rounded-xl text-[10px] font-black uppercase tracking-widest text-slate-600 hover:bg-slate-50 transition-all flex items-center gap-2"
+                    >
+                      <FileSpreadsheet size={14} />
+                      Export Excel
+                    </button>
+                  </div>
+                </div>
+
+                {/* Search field & Filter Toggles for sample entries */}
+                <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex flex-col md:flex-row gap-4 items-center justify-between">
+                  <div className="flex flex-col sm:flex-row items-center gap-4 w-full flex-1">
+                    <div className="relative w-full md:max-w-xs">
+                      <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
+                      <input
+                        type="text"
+                        placeholder="Search sample records..."
+                        value={recordSearchQuery}
+                        onChange={(e) => setRecordSearchQuery(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-10 py-2.5 text-xs text-slate-950 placeholder:text-slate-400 focus:outline-none focus:ring-4 focus:ring-brand-primary/20 focus:border-brand-primary focus:bg-brand-primary/5 transition-all font-semibold"
+                      />
+                      {recordSearchQuery && (
+                        <button 
+                          onClick={() => setRecordSearchQuery("")}
+                          className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-[10px] font-black uppercase tracking-wider"
+                        >
+                          Clear
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Filter Mode Buttons */}
+                    <div className="flex items-center bg-slate-100 p-1 rounded-xl gap-1 shrink-0 self-stretch sm:self-auto justify-between">
+                      <button
+                        onClick={() => setSampleFilterMode('last10')}
+                        className={`px-3 py-1.5 text-[10px] font-black uppercase tracking-wider rounded-lg transition-all ${
+                          sampleFilterMode === 'last10' 
+                            ? 'bg-white text-brand-primary shadow-sm' 
+                            : 'text-slate-500 hover:text-slate-900'
+                        }`}
+                      >
+                        Last 10 Days
+                      </button>
+                      <button
+                        onClick={() => setSampleFilterMode('selected')}
+                        className={`px-3 py-1.5 text-[10px] font-black uppercase tracking-wider rounded-lg transition-all ${
+                          sampleFilterMode === 'selected' 
+                            ? 'bg-white text-brand-primary shadow-sm' 
+                            : 'text-slate-500 hover:text-slate-900'
+                        }`}
+                      >
+                        Selected Date
+                      </button>
+                      <button
+                        onClick={() => setSampleFilterMode('all')}
+                        className={`px-3 py-1.5 text-[10px] font-black uppercase tracking-wider rounded-lg transition-all ${
+                          sampleFilterMode === 'all' 
+                            ? 'bg-white text-brand-primary shadow-sm' 
+                            : 'text-slate-500 hover:text-slate-900'
+                        }`}
+                      >
+                        All Time
+                      </button>
+                    </div>
+
+                    {/* Conditional Date Picker */}
+                    {sampleFilterMode === 'selected' && (
+                      <motion.div 
+                        initial={{ opacity: 0, scale: 0.95 }}
+                        animate={{ opacity: 1, scale: 1 }}
+                        className="relative flex items-center shrink-0"
+                      >
+                        <div className="absolute left-3.5 text-slate-400">
+                          <CalendarDays size={14} />
+                        </div>
+                        <input 
+                          type="date"
+                          value={dashboardDateFilter || currentProductionDateStr}
+                          onChange={(e) => updateDateFilter(e.target.value)}
+                          className="bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-4 py-2.5 text-xs font-semibold text-slate-700 focus:outline-none focus:ring-4 focus:ring-brand-primary/20 focus:border-brand-primary focus:bg-brand-primary/5 transition-all w-[150px]"
+                        />
+                      </motion.div>
+                    )}
+
+                    {/* Date Range Indication */}
+                    {sampleFilterMode === 'last10' && (
+                      <div className="text-[10px] text-slate-500 font-black tracking-wider uppercase bg-slate-50 border border-slate-100 rounded-xl px-3 py-2 shrink-0">
+                        Range: {(() => {
+                          const baseDateStr = dashboardDateFilter || getShiftAndDateForDhaka().productionDate;
+                          const base = new Date(baseDateStr);
+                          const start = new Date(base.getTime() - 9 * 24 * 60 * 60 * 1000);
+                          const formatDateStr = (d: Date) => d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' });
+                          return `${formatDateStr(start)} - ${formatDateStr(base)}`;
+                        })()}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="text-[10px] text-slate-500 font-black uppercase tracking-wider shrink-0">
+                    Showing <span className="text-brand-primary font-mono">{filteredSampleRecords.length}</span> of <span className="font-mono">{productionRecords.filter((r: any) => r.ProductionType === 'Sample').length}</span> records
+                  </div>
+                </div>
+
+                {/* Sample Records Table (Excludes Actions & Sync per User Intent) */}
+                <div className="glass-panel overflow-hidden border-slate-200">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left border-collapse min-w-[2100px]">
+                      <thead>
+                        <tr className="bg-slate-50 border-b border-slate-100">
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Entry Timestamp</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Roll ID</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Production Date</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Shift</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Production Type</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Operator ID</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Operator Name</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Machine No</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Year</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">PI Number</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Tube Size</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">UOM</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Material</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Micron</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">InLine Print</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Finished Meter</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Finished KG</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Scrap Kgs</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Roll Location</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Retailer</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Customer</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Data Update Time</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Fingerprint</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Entered By</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Production Year</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Production Month</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-50">
+                        {filteredSampleRecords.map((record, idx) => (
+                          <tr key={record.RollID || idx} className="hover:bg-slate-50/50 transition-colors group">
                             <td className="px-4 py-3 text-[10px] font-mono text-slate-500">{record.EntryTimestamp}</td>
                             <td className="px-4 py-3"><span className="font-mono text-[11px] font-black text-brand-primary">{record.RollID}</span></td>
                             <td className="px-4 py-3 text-[11px] font-bold text-slate-700">{record.ProductionDate}</td>

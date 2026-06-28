@@ -767,33 +767,51 @@ export async function syncDashboardToGoogleSheets(summary: any[]) {
         return;
     }
 
-    // 2. Ensure "Machine Status Dashboard" sheet exists
+    // 2. Ensure both sheets exist
     const spreadsheet = await sheets.spreadsheets.get({ spreadsheetId });
     const sheetsList = spreadsheet.data.sheets || [];
-    const sheetTitle = 'Machine Status Dashboard';
-    const hasSheet = sheetsList.some(s => s.properties?.title === sheetTitle);
+    
+    const dashboardTitle = 'Dashboard';
+    const machineStatusTitle = 'Machine Status Dashboard';
+    
+    const hasDashboard = sheetsList.some(s => s.properties?.title === dashboardTitle);
+    const hasMachineStatus = sheetsList.some(s => s.properties?.title === machineStatusTitle);
 
-    if (!hasSheet) {
+    const requests: any[] = [];
+    if (!hasDashboard) {
+       requests.push({ addSheet: { properties: { title: dashboardTitle } } });
+    }
+    if (!hasMachineStatus) {
+       requests.push({ addSheet: { properties: { title: machineStatusTitle } } });
+    }
+
+    if (requests.length > 0) {
        await sheets.spreadsheets.batchUpdate({
           spreadsheetId,
-          requestBody: {
-             requests: [{
-                addSheet: {
-                   properties: { title: sheetTitle }
-                }
-             }]
-          }
+          requestBody: { requests }
        });
     }
 
-    // 3. Clear existing values in the sheet to prevent leftover rows from previous runs
-    await sheets.spreadsheets.values.clear({
-       spreadsheetId,
-       range: `${sheetTitle}!A1:Z100`,
-    });
+    // 3. Construct Headers and Row values for Dashboard (exactly as requested)
+    const dashboardHeaders = [
+       'Date',
+       'Machine No',
+       'Target Kgs',
+       'Total Rolls',
+       'Total Meter',
+       'Total Production Kgs',
+       'Machine Status',
+       'Breakdown Type',
+       'Reason of Idle',
+       'Last Update Time',
+       'Breakdown No of Times',
+       'Breakdown Duration (Mins)',
+       'Idle No of Times',
+       'Idle Duration (Mins)',
+       'Last Refreshed At'
+    ];
 
-    // 4. Construct Headers and Row values
-    const headers = [
+    const machineStatusHeaders = [
        'Machine No',
        'Date',
        'Target (Kgs)',
@@ -812,7 +830,25 @@ export async function syncDashboardToGoogleSheets(summary: any[]) {
 
     const currentRefreshTime = new Date().toLocaleString('en-US', { timeZone: 'Asia/Dhaka' }) + " (Dhaka)";
 
-    const rowData = summary.map(row => [
+    const dashboardRowData = summary.map(row => [
+       row.Date || '',
+       row.MachineNo || '',
+       row.TargetKgs !== undefined ? Number(row.TargetKgs) : 0,
+       row.TotalRolls !== undefined ? Number(row.TotalRolls) : 0,
+       row.TotalMeter !== undefined ? Number(row.TotalMeter).toFixed(2) : '0.00',
+       row.TotalProductionKgs !== undefined ? Number(row.TotalProductionKgs).toFixed(2) : '0.00',
+       row.MachineStatus || 'Idle',
+       row.BreakdownType || '',
+       row.ReasonOfIdle || '',
+       row.LastUpdateTime || 'N/A',
+       row.BreakdownNoOfTimes !== undefined ? Number(row.BreakdownNoOfTimes) : 0,
+       row.BreakdownDurationMins !== undefined ? Number(row.BreakdownDurationMins).toFixed(2) : '0.00',
+       row.IdleNoOfTimes !== undefined ? Number(row.IdleNoOfTimes) : 0,
+       row.IdleDurationMins !== undefined ? Number(row.IdleDurationMins).toFixed(2) : '0.00',
+       currentRefreshTime
+    ]);
+
+    const machineStatusRowData = summary.map(row => [
        row.MachineNo || '',
        row.Date || '',
        row.TargetKgs !== undefined ? Number(row.TargetKgs) : 0,
@@ -829,17 +865,39 @@ export async function syncDashboardToGoogleSheets(summary: any[]) {
        currentRefreshTime
     ]);
 
-    // 5. Update values in the sheet
-    await enqueueSheetSync(() => sheets.spreadsheets.values.update({
-       spreadsheetId,
-       range: `${sheetTitle}!A1`,
-       valueInputOption: 'USER_ENTERED',
-       requestBody: {
-          values: [headers, ...rowData]
-       }
-    }));
+    // 4. Clear existing values and update atomically inside the same queued task 
+    // to avoid showing a blank sheet during the enqueue delay.
+    await enqueueSheetSync(async () => {
+       // Update 'Dashboard'
+       await sheets.spreadsheets.values.clear({
+          spreadsheetId,
+          range: `${dashboardTitle}!A1:Z100`,
+       });
+       await sheets.spreadsheets.values.update({
+          spreadsheetId,
+          range: `${dashboardTitle}!A1`,
+          valueInputOption: 'USER_ENTERED',
+          requestBody: {
+             values: [dashboardHeaders, ...dashboardRowData]
+          }
+       });
 
-    console.log(`[Dashboard Google Sheets Sync] Successfully updated ${summary.length} machine statuses.`);
+       // Update 'Machine Status Dashboard'
+       await sheets.spreadsheets.values.clear({
+          spreadsheetId,
+          range: `${machineStatusTitle}!A1:Z100`,
+       });
+       await sheets.spreadsheets.values.update({
+          spreadsheetId,
+          range: `${machineStatusTitle}!A1`,
+          valueInputOption: 'USER_ENTERED',
+          requestBody: {
+             values: [machineStatusHeaders, ...machineStatusRowData]
+          }
+       });
+    });
+
+    console.log(`[Dashboard Google Sheets Sync] Successfully updated ${summary.length} machine statuses on 'Dashboard' & 'Machine Status Dashboard'.`);
   } catch (err: any) {
     console.error("Error syncing dashboard to Google Sheets:", err.message);
   }

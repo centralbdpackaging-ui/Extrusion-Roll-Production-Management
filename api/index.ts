@@ -1,7 +1,7 @@
 import express from "express";
 import path from "path";
 import fs from "fs";
-import { syncToGoogleSheets, syncMultipleToGoogleSheets, syncMachineLogToGoogleSheets, syncMultipleMachineLogsToGoogleSheets, syncDashboardToGoogleSheets, syncUpdatedEntryToGoogleSheets, uploadPendingOrdersToGoogleSheets, deletePendingOrdersFromGoogleSheets, getPendingOrderDetailsByPi, getPendingOrderDetailsMapDirect, getMatchedDetails, cleanPi, getServiceAccountEmail, getGoogleAuth, getProductionSheetTitle } from "./google_sheets.js";
+import { syncToGoogleSheets, syncMultipleToGoogleSheets, syncMachineLogToGoogleSheets, syncMultipleMachineLogsToGoogleSheets, syncDashboardToGoogleSheets, syncUpdatedEntryToGoogleSheets, uploadPendingOrdersToGoogleSheets, deletePendingOrdersFromGoogleSheets, getPendingOrderDetailsByPi, getPendingOrderDetailsMapDirect, getMatchedDetails, cleanPi, getServiceAccountEmail, getGoogleAuth, getProductionSheetTitle, resolveSpreadsheetId } from "./google_sheets.js";
 import { initializeApp, getApp, getApps } from "firebase/app";
 import { 
   getFirestore, 
@@ -900,6 +900,60 @@ const safeHandler = (fn: (req: any, res: any) => Promise<void>) => async (req: a
     res.json({ message: "Google Sheet Config updated", spreadsheetId });
   }));
 
+  app.post("/api/settings/test-google-sheets", safeHandler(async (req, res) => {
+    try {
+      const auth = getGoogleAuth();
+      if (!auth) {
+        return res.status(400).json({ 
+          success: false, 
+          error: "Google credentials are missing. Please configure service account credentials on server environment." 
+        });
+      }
+      
+      const { google } = await import("googleapis");
+      const drive = google.drive({ version: 'v3', auth });
+      const sheets = google.sheets({ version: 'v4', auth });
+      
+      const spreadsheetId = await resolveSpreadsheetId(drive);
+      if (!spreadsheetId) {
+        return res.status(400).json({ 
+          success: false, 
+          error: "Spreadsheet ID is not configured. Please save a Spreadsheet ID first." 
+        });
+      }
+      
+      // Attempt to fetch spreadsheet metadata to test connectivity and permission
+      let spreadsheetMeta;
+      try {
+        spreadsheetMeta = await sheets.spreadsheets.get({ spreadsheetId });
+      } catch (err: any) {
+        console.error("Test connect failed:", err.message);
+        return res.status(400).json({
+          success: false,
+          error: `Google Sheets Permission Error: Could not access the sheet. Please make sure you have shared your Google Sheet with the Service Account email and set "Editor" permissions.\nDetails: ${err.message}`
+        });
+      }
+      
+      const title = spreadsheetMeta.data.properties?.title || "Untitled Spreadsheet";
+      const tabs = (spreadsheetMeta.data.sheets || []).map((s: any) => s.properties?.title || "");
+      
+      // Trigger a dashboard sync immediately to populate the sheet
+      await triggerDashboardSheetsSync();
+      
+      return res.json({
+        success: true,
+        title,
+        tabs,
+        message: "Successfully connected to Google Sheet! Initial machine status dashboard sync has been run. / গুগল শীটের সাথে সফলভাবে সংযোগ স্থাপন করা হয়েছে!"
+      });
+    } catch (err: any) {
+      return res.status(500).json({
+        success: false,
+        error: `Unexpected error during test: ${err.message}`
+      });
+    }
+  }));
+
   app.get("/api/settings/date-filter", safeHandler(async (req, res) => {
     const db = initializeFirebase();
     if (!db) return res.json({ dateFilter: "" });
@@ -1169,6 +1223,19 @@ const safeHandler = (fn: (req: any, res: any) => Promise<void>) => async (req: a
       console.error("[POST /api/production/bulk Sync Error]:", err.message);
     });
 
+    // Also run full resync to Google Sheets so all imported records are written
+    getDocs(query(collection(db, "production_records"), orderBy("EntryTimestamp", "asc")))
+      .then(async (recordsSnapshot) => {
+        const records = recordsSnapshot.docs.map(doc => doc.data());
+        if (records.length > 0) {
+          console.log(`[Bulk Import] Running full sheets resync with ${records.length} records.`);
+          await syncMultipleToGoogleSheets(records);
+        }
+      })
+      .catch(err => {
+        console.error("[Bulk Import Google Sheets Sync Error]:", err.message);
+      });
+
     res.status(201).json({ 
       message: `${entries.length} records imported successfully`
     });
@@ -1416,6 +1483,36 @@ const safeHandler = (fn: (req: any, res: any) => Promise<void>) => async (req: a
         numIdle: 0,
         idleTime: 0
       };
+
+      // Calculate real-time idle and breakdown count and duration (in minutes after multiplying hours by 60)
+      let idleNoOfTimes = dailyStats.numIdle || m.numIdle || 0;
+      let idleTimeHrs = dailyStats.idleTime || m.idleTime || 0;
+      let breakdownNoOfTimes = dailyStats.numBreakdown || m.numBreakdown || 0;
+      let breakdownTimeHrs = dailyStats.breakdownTime || m.breakdownTime || 0;
+
+      // Handle ongoing/active downtime directly or if state is current
+      if (m.status === 'Idle') {
+        if (idleNoOfTimes === 0) {
+          idleNoOfTimes = 1;
+        }
+        if (m.lastStatusChange && !isNaN(Date.parse(m.lastStatusChange))) {
+          const elapsedMs = Date.now() - new Date(m.lastStatusChange).getTime();
+          const elapsedHrs = Math.max(0, elapsedMs / (1000 * 60 * 60));
+          idleTimeHrs += elapsedHrs;
+        }
+      } else if (m.status === 'Breakdown') {
+        if (breakdownNoOfTimes === 0) {
+          breakdownNoOfTimes = 1;
+        }
+        if (m.lastStatusChange && !isNaN(Date.parse(m.lastStatusChange))) {
+          const elapsedMs = Date.now() - new Date(m.lastStatusChange).getTime();
+          const elapsedHrs = Math.max(0, elapsedMs / (1000 * 60 * 60));
+          breakdownTimeHrs += elapsedHrs;
+        }
+      }
+
+      const idleDurationMins = Number((idleTimeHrs * 60).toFixed(2));
+      const breakdownDurationMins = Number((breakdownTimeHrs * 60).toFixed(2));
       
       return {
         Date: dateQuery || new Date().toISOString().split('T')[0],
@@ -1428,10 +1525,10 @@ const safeHandler = (fn: (req: any, res: any) => Promise<void>) => async (req: a
         BreakdownType: (m.status === 'Breakdown' && m.reason !== 'NO_ALERTS' && m.reason !== 'Initial Setup') ? (m.reason || '') : '',
         ReasonOfIdle: (m.status === 'Idle' && m.reason !== 'NO_ALERTS' && m.reason !== 'Initial Setup') ? (m.reason || '') : '',
         LastUpdateTime: m.lastStatusChange || (machineProduction.length > 0 ? machineProduction[machineProduction.length - 1].DataUpdateTime : "N/A"),
-        BreakdownNoOfTimes: dailyStats.numBreakdown || 0,
-        BreakdownDurationMins: dailyStats.breakdownTime || 0,
-        IdleNoOfTimes: dailyStats.numIdle || 0,
-        IdleDurationMins: dailyStats.idleTime || 0,
+        BreakdownNoOfTimes: breakdownNoOfTimes,
+        BreakdownDurationMins: breakdownDurationMins,
+        IdleNoOfTimes: idleNoOfTimes,
+        IdleDurationMins: idleDurationMins,
         LastUpdate: m.lastStatusChange || (machineProduction.length > 0 ? machineProduction[machineProduction.length - 1].DataUpdateTime : "N/A"),
         Reason: (m.reason === 'NO_ALERTS' || m.reason === 'Initial Setup') ? '' : (m.reason || '')
       };
@@ -1499,6 +1596,36 @@ const safeHandler = (fn: (req: any, res: any) => Promise<void>) => async (req: a
           numIdle: 0,
           idleTime: 0
         };
+
+        // Calculate real-time idle and breakdown count and duration (in minutes after multiplying hours by 60)
+        let idleNoOfTimes = dailyStats.numIdle || m.numIdle || 0;
+        let idleTimeHrs = dailyStats.idleTime || m.idleTime || 0;
+        let breakdownNoOfTimes = dailyStats.numBreakdown || m.numBreakdown || 0;
+        let breakdownTimeHrs = dailyStats.breakdownTime || m.breakdownTime || 0;
+
+        // Handle ongoing/active downtime directly or if state is current
+        if (m.status === 'Idle') {
+          if (idleNoOfTimes === 0) {
+            idleNoOfTimes = 1;
+          }
+          if (m.lastStatusChange && !isNaN(Date.parse(m.lastStatusChange))) {
+            const elapsedMs = Date.now() - new Date(m.lastStatusChange).getTime();
+            const elapsedHrs = Math.max(0, elapsedMs / (1000 * 60 * 60));
+            idleTimeHrs += elapsedHrs;
+          }
+        } else if (m.status === 'Breakdown') {
+          if (breakdownNoOfTimes === 0) {
+            breakdownNoOfTimes = 1;
+          }
+          if (m.lastStatusChange && !isNaN(Date.parse(m.lastStatusChange))) {
+            const elapsedMs = Date.now() - new Date(m.lastStatusChange).getTime();
+            const elapsedHrs = Math.max(0, elapsedMs / (1000 * 60 * 60));
+            breakdownTimeHrs += elapsedHrs;
+          }
+        }
+
+        const idleDurationMins = Number((idleTimeHrs * 60).toFixed(2));
+        const breakdownDurationMins = Number((breakdownTimeHrs * 60).toFixed(2));
         
         return {
           Date: productionDate,
@@ -1511,10 +1638,10 @@ const safeHandler = (fn: (req: any, res: any) => Promise<void>) => async (req: a
           BreakdownType: (m.status === 'Breakdown' && m.reason !== 'NO_ALERTS' && m.reason !== 'Initial Setup') ? (m.reason || '') : '',
           ReasonOfIdle: (m.status === 'Idle' && m.reason !== 'NO_ALERTS' && m.reason !== 'Initial Setup') ? (m.reason || '') : '',
           LastUpdateTime: m.lastStatusChange || (machineProduction.length > 0 ? machineProduction[machineProduction.length - 1].DataUpdateTime : "N/A"),
-          BreakdownNoOfTimes: dailyStats.numBreakdown || 0,
-          BreakdownDurationMins: dailyStats.breakdownTime || 0,
-          IdleNoOfTimes: dailyStats.numIdle || 0,
-          IdleDurationMins: dailyStats.idleTime || 0,
+          BreakdownNoOfTimes: breakdownNoOfTimes,
+          BreakdownDurationMins: breakdownDurationMins,
+          IdleNoOfTimes: idleNoOfTimes,
+          IdleDurationMins: idleDurationMins,
           LastUpdate: m.lastStatusChange || (machineProduction.length > 0 ? machineProduction[machineProduction.length - 1].DataUpdateTime : "N/A"),
           Reason: (m.reason === 'NO_ALERTS' || m.reason === 'Initial Setup') ? '' : (m.reason || '')
         };
